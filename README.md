@@ -12,9 +12,10 @@ netscan wraps the `nmap` engine with a real workflow: target inventory, saved sc
 live streaming results as each host comes in, and (soon) scan history with differential
 scanning. One binary. No config required on first run.
 
-**Status:** Early MVP. Target inventory, profiles, live scan view, streaming XML parsing,
-and the core TUI shell are working. Scan history, diffing, incident bundle export, and
-AI triage are next.
+**Status:** v0.2. Target inventory, scan profiles, live streaming scan view,
+SQLite-backed scan history, automatic differential scanning, and incident bundle
+export are all working. NSE script picker, scheduled/daemon mode, and opt-in AI
+triage are next.
 
 ---
 
@@ -65,13 +66,49 @@ netscan --config-paths   # show where config and data live
 
 | Key | Action |
 |-----|--------|
-| `1` / `2` / `3` | Switch tabs (Targets / Profiles / Scan) |
+| `1` / `2` / `3` / `4` | Switch tabs (Targets / Profiles / Scan / History) |
 | `Tab` | Next tab |
 | `↑↓` / `j` `k` | Navigate lists |
 | `Enter` | Run scan with selected target group + profile |
 | `x` | Stop a running scan |
+| `Shift+E` | Export incident bundle (Scan or History tab) |
+| `e` | Export selected history entry |
+| `r` | Reload history list |
 | `?` | Help overlay |
 | `q` | Quit (or stop a running scan) |
+
+## Scan history & differential scanning
+
+Every completed scan is persisted to a local SQLite database at
+`~/.local/share/netscan/history.db` (or the platform equivalent). When you finish a
+scan, netscan automatically looks up the most recent prior scan with the same
+target group + profile combination and renders a diff pane at the bottom of the
+Scan tab showing:
+
+- New hosts that came online
+- Removed hosts that went dark
+- Newly open ports (potential attack surface growth)
+- Newly closed ports
+- Service changes (e.g. `nginx` → `apache`)
+- Version changes (e.g. `OpenSSH 9.2` → `OpenSSH 9.3`)
+
+This is the core value loop: **run the same scan on a schedule, see only what
+changed.** Press `4` to browse the full scan history.
+
+## Incident bundle export
+
+Press `Shift+E` on the Scan tab (or `e` in History) to export a self-contained
+bundle into `~/.local/share/netscan/exports/`:
+
+```
+netscan_YYYY-MM-DD-HH-MM-SS_<group>_<scan-id>/
+  manifest.json    scan metadata
+  hosts.json       normalized host + port data
+  summary.md       human-readable write-up
+  diff.md          diff against previous scan (if present)
+```
+
+Hand this directory to a teammate, a client, or your future self.
 
 ## Config format
 
@@ -114,10 +151,11 @@ never need to include those yourself.
 - [x] TUI shell with target/profile inventory
 - [x] Live scan view with streaming XML parse
 - [x] Default profiles (`quick`, `full-tcp`, `udp-top`, `ssl-audit`, `discovery`)
-- [ ] SQLite-backed scan history
-- [ ] Automatic diff on scan completion
-- [ ] Manual diff between any two historical scans
-- [ ] Incident bundle export (`Shift+E`)
+- [x] SQLite-backed scan history
+- [x] Automatic diff on scan completion
+- [x] History browser with detail view
+- [x] Incident bundle export (`Shift+E`)
+- [ ] Manual diff between any two historical scans (select two in History)
 - [ ] NSE script picker
 - [ ] Scheduled / daemon mode for background scans
 - [ ] Webhook alerts on change
