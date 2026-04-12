@@ -1,4 +1,4 @@
-use crate::app::{App, ScanState, Tab};
+use crate::app::{AiState, App, ScanState, Tab};
 use crate::diff::{HostChangeKind, PortChangeKind, ScanDiff};
 use crate::history::{self, ScanSummary};
 use crate::types::{Host, HostStatus, Port, PortState};
@@ -277,22 +277,23 @@ fn render_scan(f: &mut Frame, app: &App, area: Rect) {
         .as_ref()
         .map(|d| !d.is_empty())
         .unwrap_or(false);
+    let has_ai = !matches!(app.ai_state, AiState::Off);
 
-    let layout = if has_diff {
-        Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(4),
-                Constraint::Min(0),
-                Constraint::Length(10),
-            ])
-            .split(area)
-    } else {
-        Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Length(4), Constraint::Min(0)])
-            .split(area)
-    };
+    // Build vertical layout based on which panes are active.
+    let mut constraints: Vec<Constraint> = Vec::new();
+    constraints.push(Constraint::Length(4)); // summary
+    constraints.push(Constraint::Min(0)); // host list + detail
+    if has_diff {
+        constraints.push(Constraint::Length(10));
+    }
+    if has_ai {
+        constraints.push(Constraint::Length(ai_pane_height(app)));
+    }
+
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(constraints)
+        .split(area);
 
     render_scan_summary(f, app, layout[0]);
 
@@ -304,8 +305,76 @@ fn render_scan(f: &mut Frame, app: &App, area: Rect) {
     render_host_list(f, app, body[0]);
     render_host_detail(f, app, body[1]);
 
+    let mut idx = 2;
     if has_diff {
-        render_diff_pane(f, app.last_diff.as_ref().unwrap(), layout[2]);
+        render_diff_pane(f, app.last_diff.as_ref().unwrap(), layout[idx]);
+        idx += 1;
+    }
+    if has_ai {
+        render_ai_pane(f, app, layout[idx]);
+    }
+}
+
+fn ai_pane_height(app: &App) -> u16 {
+    match &app.ai_state {
+        AiState::Off => 0,
+        AiState::Pending => 3,
+        AiState::Ready(text) => {
+            let lines = text.lines().count() as u16 + 2;
+            lines.clamp(4, 14)
+        }
+        AiState::Failed(_) => 4,
+    }
+}
+
+fn render_ai_pane(f: &mut Frame, app: &App, area: Rect) {
+    let title = Line::from(vec![
+        Span::styled(" AI triage ", Style::default().fg(ACCENT).bold()),
+        Span::styled(
+            format!("· {} ", app_model_label(app)),
+            Style::default().fg(DIM),
+        ),
+    ]);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(ACCENT))
+        .title(title);
+
+    let lines: Vec<Line> = match &app.ai_state {
+        AiState::Off => vec![],
+        AiState::Pending => vec![Line::from(Span::styled(
+            " analyzing scan… ",
+            Style::default().fg(DIM),
+        ))],
+        AiState::Ready(text) => text
+            .lines()
+            .map(|l| Line::from(Span::styled(format!(" {l}"), Style::default().fg(TEXT))))
+            .collect(),
+        AiState::Failed(err) => vec![
+            Line::from(Span::styled(
+                " AI triage failed",
+                Style::default().fg(DANGER).bold(),
+            )),
+            Line::from(Span::styled(format!(" {err}"), Style::default().fg(DIM))),
+            Line::from(Span::styled(
+                " check ~/.config/netscan/config.toml — endpoint, model, or Ollama daemon",
+                Style::default().fg(DIM),
+            )),
+        ],
+    };
+
+    let para = Paragraph::new(lines).block(block).wrap(Wrap { trim: false });
+    f.render_widget(para, area);
+}
+
+fn app_model_label(app: &App) -> &str {
+    // Displayed next to the AI title — model name + endpoint if useful.
+    // Kept intentionally narrow; full config lives in the TOML file.
+    match &app.ai_state {
+        AiState::Pending => "working",
+        AiState::Ready(_) => "ready",
+        AiState::Failed(_) => "error",
+        AiState::Off => "",
     }
 }
 
@@ -625,11 +694,150 @@ fn render_history(f: &mut Frame, app: &App, area: Rect) {
     render_history_detail(f, app, chunks[1]);
 }
 
+fn render_full_diff(f: &mut Frame, diff: &ScanDiff, area: Rect) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(ACCENT))
+        .title(Line::from(vec![
+            Span::styled(" Diff view ", Style::default().fg(ACCENT).bold()),
+            Span::styled("(Esc to close)", Style::default().fg(DIM)),
+        ]));
+
+    let mut lines: Vec<Line> = Vec::new();
+    lines.push(Line::from(vec![
+        Span::styled(" prev: ", Style::default().fg(DIM)),
+        Span::styled(
+            format!("{}  ({})", &diff.prev_id[..diff.prev_id.len().min(8)], history::format_timestamp(diff.prev_started)),
+            Style::default().fg(TEXT),
+        ),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled(" curr: ", Style::default().fg(DIM)),
+        Span::styled(
+            &diff.curr_id[..diff.curr_id.len().min(8)],
+            Style::default().fg(TEXT),
+        ),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled(" summary: ", Style::default().fg(DIM)),
+        Span::styled(diff.summary(), Style::default().fg(ACCENT).bold()),
+    ]));
+    lines.push(Line::raw(""));
+
+    if diff.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "No changes between these scans.",
+            Style::default().fg(DIM),
+        )));
+    }
+
+    for hc in &diff.host_changes {
+        let (tag, color) = match hc.kind {
+            HostChangeKind::New => ("+ NEW   ", OK),
+            HostChangeKind::Removed => ("- RMV   ", DANGER),
+            HostChangeKind::StatusChanged => ("~ STATUS", WARN),
+            HostChangeKind::Modified => ("~ MOD   ", WARN),
+            HostChangeKind::Unchanged => continue,
+        };
+        let host_label = match &hc.hostname {
+            Some(h) => format!("{} ({})", hc.address, h),
+            None => hc.address.clone(),
+        };
+        lines.push(Line::from(vec![
+            Span::styled(" ", Style::default()),
+            Span::styled(tag, Style::default().fg(color).bold()),
+            Span::raw("  "),
+            Span::styled(host_label, Style::default().fg(TEXT).bold()),
+        ]));
+        for pc in &hc.port_changes {
+            let (prefix, pcolor, detail) = match pc.kind {
+                PortChangeKind::NewlyOpen => (
+                    "     + ",
+                    OK,
+                    format!(
+                        "{}/{} {} {}",
+                        pc.port,
+                        pc.protocol,
+                        pc.curr_service.clone().unwrap_or_default(),
+                        pc.curr_version.clone().unwrap_or_default()
+                    ),
+                ),
+                PortChangeKind::NewlyClosed => (
+                    "     - ",
+                    DANGER,
+                    format!(
+                        "{}/{} {} {}",
+                        pc.port,
+                        pc.protocol,
+                        pc.prev_service.clone().unwrap_or_default(),
+                        pc.prev_version.clone().unwrap_or_default()
+                    ),
+                ),
+                PortChangeKind::StateChanged => (
+                    "     ~ ",
+                    WARN,
+                    format!(
+                        "{}/{}  {} → {}",
+                        pc.port,
+                        pc.protocol,
+                        state_label(pc.prev_state),
+                        state_label(pc.curr_state)
+                    ),
+                ),
+                PortChangeKind::ServiceChanged => (
+                    "     ~ ",
+                    WARN,
+                    format!(
+                        "{}/{}  service {} → {}",
+                        pc.port,
+                        pc.protocol,
+                        pc.prev_service.clone().unwrap_or_else(|| "?".to_string()),
+                        pc.curr_service.clone().unwrap_or_else(|| "?".to_string())
+                    ),
+                ),
+                PortChangeKind::VersionChanged => (
+                    "     ~ ",
+                    WARN,
+                    format!(
+                        "{}/{}  version {} → {}",
+                        pc.port,
+                        pc.protocol,
+                        pc.prev_version.clone().unwrap_or_else(|| "?".to_string()),
+                        pc.curr_version.clone().unwrap_or_else(|| "?".to_string())
+                    ),
+                ),
+            };
+            lines.push(Line::from(vec![
+                Span::styled(prefix, Style::default().fg(pcolor).bold()),
+                Span::styled(detail, Style::default().fg(DIM)),
+            ]));
+        }
+    }
+
+    let para = Paragraph::new(lines).block(block).wrap(Wrap { trim: false });
+    f.render_widget(para, area);
+}
+
+fn state_label(s: Option<PortState>) -> String {
+    match s {
+        Some(st) => st.label().to_string(),
+        None => "—".to_string(),
+    }
+}
+
 fn render_history_list(f: &mut Frame, app: &App, area: Rect) {
+    let title = match &app.history_marked_id {
+        Some(id) => format!(
+            " History ({})  ★ {} marked ",
+            app.history_entries.len(),
+            &id[..id.len().min(8)]
+        ),
+        None => format!(" History ({}) ", app.history_entries.len()),
+    };
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(BORDER))
-        .title(format!(" History ({}) ", app.history_entries.len()));
+        .title(title);
 
     if app.history_entries.is_empty() {
         let para = Paragraph::new("No scans in history yet. Run a scan from the Targets tab.")
@@ -650,13 +858,20 @@ fn render_history_list(f: &mut Frame, app: &App, area: Rect) {
                 "running" => ACCENT,
                 _ => DANGER,
             };
+            let is_marked = app.history_marked_id.as_deref() == Some(s.id.as_str());
+            let marker = if is_marked {
+                Span::styled("★ ", Style::default().fg(WARN).bold())
+            } else {
+                Span::raw("  ")
+            };
             ListItem::new(Line::from(vec![
+                marker,
                 Span::styled(
-                    format!(" {} ", s.group_name),
+                    s.group_name.clone(),
                     Style::default().fg(TEXT).bold(),
                 ),
                 Span::styled(
-                    format!("· {}", s.profile_name),
+                    format!(" · {}", s.profile_name),
                     Style::default().fg(DIM),
                 ),
                 Span::raw("  "),
@@ -685,6 +900,11 @@ fn render_history_list(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn render_history_detail(f: &mut Frame, app: &App, area: Rect) {
+    if let Some(diff) = app.history_diff_view.as_ref() {
+        render_full_diff(f, diff, area);
+        return;
+    }
+
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(BORDER))
@@ -757,7 +977,7 @@ fn render_status(f: &mut Frame, app: &App, area: Rect) {
         Tab::Targets => " [↑↓/jk] navigate   [Enter] run scan   [Tab] next tab   [?] help   [q] quit ",
         Tab::Profiles => " [↑↓/jk] navigate   [Enter] run scan   [Tab] next tab   [?] help   [q] quit ",
         Tab::Scan => " [↑↓/jk] hosts   [x] stop   [Enter] rerun   [Shift+E] export   [4] history ",
-        Tab::History => " [↑↓/jk] navigate   [e] export bundle   [r] reload   [Tab] next tab   [?] help ",
+        Tab::History => " [↑↓/jk] navigate   [m] mark   [d] diff marked↔current   [e] export   [r] reload   [Esc] clear ",
     };
     let mut spans: Vec<Span> = vec![Span::styled(hint, Style::default().fg(DIM))];
 
@@ -806,9 +1026,12 @@ fn render_help_overlay(f: &mut Frame, area: Rect) {
         Line::from(" [↑↓/jk]   navigate lists"),
         Line::from(" [Enter]   run scan with selected target + profile"),
         Line::from(" [x]       stop a running scan"),
-        Line::from(" [Shift+E] export incident bundle (Scan or History tab)"),
+        Line::from(" [Shift+E] export incident bundle (Scan tab)"),
+        Line::from(" [m]       mark scan for diff  (History tab)"),
+        Line::from(" [d]       diff marked ↔ current  (History tab)"),
         Line::from(" [e]       export selected history entry"),
         Line::from(" [r]       reload history list"),
+        Line::from(" [Esc]     close diff view / clear mark"),
         Line::from(" [?]       this help"),
         Line::from(" [q]       quit (or stop a running scan)"),
         Line::raw(""),
@@ -822,6 +1045,10 @@ fn render_help_overlay(f: &mut Frame, area: Rect) {
         )),
         Line::from(Span::styled(
             "  ~/.config/netscan/profiles.toml",
+            Style::default().fg(DIM),
+        )),
+        Line::from(Span::styled(
+            "  ~/.config/netscan/config.toml  (AI triage)",
             Style::default().fg(DIM),
         )),
         Line::raw(""),

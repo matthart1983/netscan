@@ -1,3 +1,4 @@
+mod ai;
 mod app;
 mod config;
 mod diff;
@@ -50,11 +51,12 @@ fn main() -> Result<()> {
     paths.ensure_dirs().context("creating config/data dirs")?;
     let targets = config::load_targets(&paths.targets_file)?;
     let profiles = config::load_profiles(&paths.profiles_file)?;
+    let app_config = config::load_app_config(&paths.config_file)?;
     let store = history::Store::open(&paths.data_dir.join("history.db"))
         .context("opening history store")?;
 
     let mut terminal = init_terminal()?;
-    let res = app::App::new(targets, profiles, store, paths).run(&mut terminal);
+    let res = app::App::new(targets, profiles, store, paths, app_config).run(&mut terminal);
     restore_terminal(&mut terminal)?;
     res
 }

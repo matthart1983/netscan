@@ -1,4 +1,5 @@
-use crate::config::Paths;
+use crate::ai::{self, AiResult};
+use crate::config::{AppConfig, Paths};
 use crate::diff::{self, ScanDiff};
 use crate::history::{self, ScanRecord, ScanSummary, Store};
 use crate::nmap::{self, ScanEvent, ScanHandle};
@@ -7,6 +8,7 @@ use crate::ui;
 use crate::Tui;
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,6 +36,14 @@ pub enum ScanState {
     Running,
     Finished,
     Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AiState {
+    Off,
+    Pending,
+    Ready(String),
+    Failed(String),
 }
 
 pub struct App {
@@ -65,9 +75,16 @@ pub struct App {
     pub history_entries: Vec<ScanSummary>,
     pub history_index: usize,
     pub history_selected: Option<ScanRecord>,
+    pub history_marked_id: Option<String>,
+    pub history_diff_view: Option<ScanDiff>,
+
+    // AI triage
+    pub ai_state: AiState,
+    ai_rx: Option<Receiver<AiResult>>,
 
     store: Store,
     paths: Paths,
+    config: AppConfig,
     handle: Option<ScanHandle>,
     last_tick: Instant,
     pub show_help: bool,
@@ -80,6 +97,7 @@ impl App {
         profiles: Vec<Profile>,
         store: Store,
         paths: Paths,
+        config: AppConfig,
     ) -> Self {
         Self {
             tab: Tab::Targets,
@@ -107,8 +125,13 @@ impl App {
             history_entries: Vec::new(),
             history_index: 0,
             history_selected: None,
+            history_marked_id: None,
+            history_diff_view: None,
+            ai_state: AiState::Off,
+            ai_rx: None,
             store,
             paths,
+            config,
             handle: None,
             last_tick: Instant::now(),
             show_help: false,
@@ -120,6 +143,7 @@ impl App {
         let tick_rate = Duration::from_millis(100);
         while !self.should_quit {
             self.drain_scan_events();
+            self.drain_ai_events();
 
             terminal.draw(|f| ui::render(f, &self))?;
 
@@ -202,7 +226,60 @@ impl App {
         }
         if just_finished {
             self.persist_completed_scan();
+            self.maybe_spawn_ai_triage();
         }
+    }
+
+    fn drain_ai_events(&mut self) {
+        let done = if let Some(rx) = self.ai_rx.as_ref() {
+            match rx.try_recv() {
+                Ok(AiResult::Ok(text)) => {
+                    self.ai_state = AiState::Ready(text);
+                    true
+                }
+                Ok(AiResult::Err(e)) => {
+                    self.ai_state = AiState::Failed(e);
+                    true
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => false,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    if matches!(self.ai_state, AiState::Pending) {
+                        self.ai_state = AiState::Failed("ai worker disconnected".to_string());
+                    }
+                    true
+                }
+            }
+        } else {
+            false
+        };
+        if done {
+            self.ai_rx = None;
+        }
+    }
+
+    fn maybe_spawn_ai_triage(&mut self) {
+        if !self.config.ai.enabled {
+            self.ai_state = AiState::Off;
+            self.ai_rx = None;
+            return;
+        }
+        let record = ScanRecord {
+            id: self.scan_id.clone(),
+            group_name: self.scan_group.clone(),
+            profile_name: self.scan_profile_name.clone(),
+            flags: self.scan_flags.clone(),
+            command: self.scan_command.clone(),
+            started_at: self.scan_started_wall,
+            ended_at: Some(history::now_secs()),
+            status: "finished".to_string(),
+            summary: self.scan_summary.clone(),
+            hosts_up: self.hosts_up,
+            hosts_down: self.hosts_down,
+            hosts: self.scan_hosts.clone(),
+        };
+        let rx = ai::spawn_summary(self.config.ai.clone(), record, self.last_diff.clone());
+        self.ai_state = AiState::Pending;
+        self.ai_rx = Some(rx);
     }
 
     fn persist_completed_scan(&mut self) {
@@ -351,15 +428,27 @@ impl App {
 
     fn on_key_history(&mut self, key: KeyEvent) {
         match key.code {
+            KeyCode::Esc => {
+                if self.history_diff_view.is_some() {
+                    self.history_diff_view = None;
+                    return;
+                }
+                if self.history_marked_id.is_some() {
+                    self.history_marked_id = None;
+                    self.toast = Some(("mark cleared".to_string(), Instant::now()));
+                }
+            }
             KeyCode::Up | KeyCode::Char('k') => {
                 if self.history_index > 0 {
                     self.history_index -= 1;
+                    self.history_diff_view = None;
                     self.load_history_detail();
                 }
             }
             KeyCode::Down | KeyCode::Char('j') => {
                 if self.history_index + 1 < self.history_entries.len() {
                     self.history_index += 1;
+                    self.history_diff_view = None;
                     self.load_history_detail();
                 }
             }
@@ -369,8 +458,70 @@ impl App {
             KeyCode::Char('e') | KeyCode::Char('E') => {
                 self.export_selected();
             }
+            KeyCode::Char('m') => {
+                self.toggle_mark_current();
+            }
+            KeyCode::Char('d') | KeyCode::Char('D') => {
+                self.run_marked_diff();
+            }
             _ => {}
         }
+    }
+
+    fn toggle_mark_current(&mut self) {
+        let Some(entry) = self.history_entries.get(self.history_index) else {
+            return;
+        };
+        if self.history_marked_id.as_deref() == Some(&entry.id) {
+            self.history_marked_id = None;
+            self.toast = Some(("mark cleared".to_string(), Instant::now()));
+            return;
+        }
+        self.history_marked_id = Some(entry.id.clone());
+        self.toast = Some((
+            format!("marked {} — select another and press [d] to diff", &entry.id[..entry.id.len().min(8)]),
+            Instant::now(),
+        ));
+    }
+
+    fn run_marked_diff(&mut self) {
+        let Some(marked_id) = self.history_marked_id.clone() else {
+            self.toast = Some((
+                "press [m] to mark a scan first".to_string(),
+                Instant::now(),
+            ));
+            return;
+        };
+        let Some(current) = self.history_selected.as_ref() else {
+            return;
+        };
+        if current.id == marked_id {
+            self.toast = Some((
+                "mark and current are the same scan".to_string(),
+                Instant::now(),
+            ));
+            return;
+        }
+        let marked_rec = match self.store.get_scan(&marked_id) {
+            Ok(Some(r)) => r,
+            Ok(None) => {
+                self.toast = Some(("marked scan no longer exists".to_string(), Instant::now()));
+                self.history_marked_id = None;
+                return;
+            }
+            Err(e) => {
+                self.scan_error = Some(format!("diff load failed: {e}"));
+                return;
+            }
+        };
+        // Order matters: older scan is "prev", newer is "curr".
+        let (prev, curr) = if marked_rec.started_at <= current.started_at {
+            (marked_rec, current.clone())
+        } else {
+            (current.clone(), marked_rec)
+        };
+        let d = diff::compute(&prev, &curr);
+        self.history_diff_view = Some(d);
     }
 
     fn export_selected(&mut self) {
@@ -526,6 +677,12 @@ impl App {
                 self.hosts_up = 0;
                 self.hosts_down = 0;
                 self.last_diff = None;
+                self.ai_state = if self.config.ai.enabled {
+                    AiState::Pending
+                } else {
+                    AiState::Off
+                };
+                self.ai_rx = None;
                 self.tab = Tab::Scan;
             }
             Err(e) => {

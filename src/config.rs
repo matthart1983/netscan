@@ -5,11 +5,13 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
+#[derive(Clone)]
 pub struct Paths {
     pub config_dir: PathBuf,
     pub data_dir: PathBuf,
     pub targets_file: PathBuf,
     pub profiles_file: PathBuf,
+    pub config_file: PathBuf,
 }
 
 impl Paths {
@@ -20,11 +22,13 @@ impl Paths {
         let data_dir = dirs.data_dir().to_path_buf();
         let targets_file = config_dir.join("targets.toml");
         let profiles_file = config_dir.join("profiles.toml");
+        let config_file = config_dir.join("config.toml");
         Ok(Self {
             config_dir,
             data_dir,
             targets_file,
             profiles_file,
+            config_file,
         })
     }
 
@@ -34,6 +38,96 @@ impl Paths {
         fs::create_dir_all(self.data_dir.join("scans"))?;
         Ok(())
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AppConfig {
+    #[serde(default)]
+    pub ai: AiConfig,
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        Self {
+            ai: AiConfig::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AiConfig {
+    /// When true, netscan will send a scan summary to the configured endpoint
+    /// after every completed scan and render the response in the Scan tab.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Ollama endpoint. "local" resolves to http://localhost:11434.
+    /// Any value starting with "http" is used verbatim.
+    #[serde(default = "default_ai_endpoint")]
+    pub endpoint: String,
+    /// Model name to use with /api/generate (e.g. "llama3.2", "qwen2.5:7b").
+    #[serde(default = "default_ai_model")]
+    pub model: String,
+    /// Request timeout in seconds.
+    #[serde(default = "default_ai_timeout")]
+    pub timeout_secs: u64,
+}
+
+impl Default for AiConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            endpoint: default_ai_endpoint(),
+            model: default_ai_model(),
+            timeout_secs: default_ai_timeout(),
+        }
+    }
+}
+
+fn default_ai_endpoint() -> String {
+    "local".to_string()
+}
+
+fn default_ai_model() -> String {
+    "llama3.2".to_string()
+}
+
+fn default_ai_timeout() -> u64 {
+    60
+}
+
+pub fn load_app_config(path: &std::path::Path) -> Result<AppConfig> {
+    if !path.exists() {
+        let default = AppConfig::default();
+        let text = format!(
+            r#"# netscan config
+#
+# AI Insights — opt-in. When enabled, netscan sends a structured summary of
+# each completed scan (and its diff vs the previous scan) to an Ollama endpoint
+# and renders the response in the Scan tab.
+#
+# Endpoint options:
+#   "local"                      — http://localhost:11434 (default Ollama daemon)
+#   "http://host:11434"          — remote Ollama on another machine
+#   "https://ollama.com"         — Ollama Cloud (you must be logged in locally)
+#
+# Nothing happens unless ai.enabled = true.
+
+[ai]
+enabled = false
+endpoint = "{}"
+model = "{}"
+timeout_secs = {}
+"#,
+            default.ai.endpoint, default.ai.model, default.ai.timeout_secs
+        );
+        fs::write(path, text)?;
+        return Ok(default);
+    }
+    let text = fs::read_to_string(path)
+        .with_context(|| format!("reading {}", path.display()))?;
+    let cfg: AppConfig = toml::from_str(&text)
+        .with_context(|| format!("parsing {}", path.display()))?;
+    Ok(cfg)
 }
 
 #[derive(Serialize, Deserialize, Default)]

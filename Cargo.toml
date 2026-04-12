@@ -26,6 +26,8 @@ quick-xml = "0.39"
 clap = { version = "4", features = ["derive"] }
 directories = "5"
 rusqlite = { version = "0.32", features = ["bundled"] }
+ureq = { version = "2", features = ["json"] }
+serde_json = "1"
 
 [profile.release]
 lto = "thin"

@@ -12,10 +12,11 @@ netscan wraps the `nmap` engine with a real workflow: target inventory, saved sc
 live streaming results as each host comes in, and (soon) scan history with differential
 scanning. One binary. No config required on first run.
 
-**Status:** v0.2. Target inventory, scan profiles, live streaming scan view,
-SQLite-backed scan history, automatic differential scanning, and incident bundle
-export are all working. NSE script picker, scheduled/daemon mode, and opt-in AI
-triage are next.
+**Status:** v0.3. Target inventory, scan profiles, live streaming scan view,
+SQLite-backed scan history, automatic differential scanning, incident bundle
+export, **manual diff between any two historical scans**, and **opt-in AI
+triage via local or remote Ollama** are all working. NSE script picker and
+scheduled/daemon mode are next.
 
 ---
 
@@ -71,9 +72,12 @@ netscan --config-paths   # show where config and data live
 | `↑↓` / `j` `k` | Navigate lists |
 | `Enter` | Run scan with selected target group + profile |
 | `x` | Stop a running scan |
-| `Shift+E` | Export incident bundle (Scan or History tab) |
+| `Shift+E` | Export incident bundle (Scan tab) |
+| `m` | Mark a scan for diff (History tab) |
+| `d` | Diff marked ↔ current (History tab) |
 | `e` | Export selected history entry |
 | `r` | Reload history list |
+| `Esc` | Close diff view / clear mark |
 | `?` | Help overlay |
 | `q` | Quit (or stop a running scan) |
 
@@ -109,6 +113,50 @@ netscan_YYYY-MM-DD-HH-MM-SS_<group>_<scan-id>/
 ```
 
 Hand this directory to a teammate, a client, or your future self.
+
+## AI triage (opt-in)
+
+netscan can send a structured summary of every completed scan (plus its diff
+against the previous scan) to an Ollama endpoint and render the model's
+analysis live in the Scan tab. Nothing happens unless you turn it on.
+
+Enable it by editing `~/.config/netscan/config.toml`:
+
+```toml
+[ai]
+enabled = true
+endpoint = "local"      # or "http://host:11434" or "https://ollama.com"
+model = "llama3.2"
+timeout_secs = 60
+```
+
+**Endpoint options:**
+
+- `"local"` — uses `http://localhost:11434` (the default Ollama daemon). Zero-setup if you already run Ollama.
+- `"http://host:11434"` — a remote Ollama on another machine on your network.
+- `"https://ollama.com"` — Ollama Cloud models (you must be logged in via the local daemon first; netscan itself never handles API keys).
+
+When enabled, the AI triage pane appears at the bottom of the Scan tab after
+each scan with a bullet-point analysis covering: the most important finding,
+security concerns, suspicious changes since the last scan, and what to
+investigate first.
+
+Requests run on a background thread — the TUI stays responsive while the model
+is working, and errors are surfaced non-destructively (bad endpoint, Ollama
+daemon down, timeout, etc.).
+
+## Manual diff between any two scans
+
+In the History tab:
+
+1. Navigate to the first scan you want to compare and press `m` to mark it (★
+   appears next to it in the list and the title bar shows the mark).
+2. Navigate to any other scan and press `d`.
+3. The detail pane switches to a full-fidelity diff view showing every host
+   and port change between the two scans. Older scan is treated as `prev`
+   regardless of which one you marked first.
+4. Press `Esc` to close the diff and return to the scan detail view. `Esc`
+   again clears the mark.
 
 ## Config format
 
@@ -155,11 +203,11 @@ never need to include those yourself.
 - [x] Automatic diff on scan completion
 - [x] History browser with detail view
 - [x] Incident bundle export (`Shift+E`)
-- [ ] Manual diff between any two historical scans (select two in History)
+- [x] Manual diff between any two historical scans
+- [x] Opt-in AI triage via local or remote Ollama
 - [ ] NSE script picker
 - [ ] Scheduled / daemon mode for background scans
 - [ ] Webhook alerts on change
-- [ ] Opt-in AI triage via local or remote Ollama
 
 ## License
 
