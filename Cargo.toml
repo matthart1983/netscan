@@ -1,0 +1,32 @@
+[package]
+name = "netscan"
+version = "0.1.0"
+edition = "2021"
+description = "Continuous attack surface monitor — a TUI workflow for nmap with scan history, live streaming, and differential scanning"
+license = "MIT"
+repository = "https://github.com/matthart1983/netscan"
+homepage = "https://github.com/matthart1983/netscan"
+readme = "README.md"
+keywords = ["nmap", "tui", "security", "network", "scan"]
+categories = ["command-line-utilities", "network-programming"]
+authors = ["Matt Hartley <matthew.t.hartley@gmail.com>"]
+exclude = ["target/", ".git/"]
+
+[[bin]]
+name = "netscan"
+path = "src/main.rs"
+
+[dependencies]
+ratatui = { version = "0.30", features = ["crossterm"] }
+crossterm = "0.29"
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+quick-xml = "0.39"
+clap = { version = "4", features = ["derive"] }
+directories = "5"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
