@@ -3,14 +3,22 @@
   <strong>The continuous attack surface monitor — a TUI workflow for nmap.</strong>
 </p>
 <p align="center">
-  <img src="https://img.shields.io/badge/status-early--development-orange" alt="status">
+  <a href="https://github.com/matthart1983/netscan/releases"><img src="https://img.shields.io/github/v/release/matthart1983/netscan" alt="Release"></a>
   <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux-blue" alt="platform">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="license">
 </p>
 
+<p align="center">
+  <img src="demo.gif" alt="netscan — live scan view, auto-diff, history, themes" width="860">
+</p>
+
+<p align="center">
+  <em>Live scan streaming with progress bar + ETA · auto-diff on re-run · scan history · 5 themes.</em>
+</p>
+
 netscan wraps the `nmap` engine with a real workflow: target inventory, saved scan profiles,
-live streaming results as each host comes in, and (soon) scan history with differential
-scanning. One binary. No config required on first run.
+live streaming results as each host comes in, and scan history with differential scanning.
+One binary. No config required on first run.
 
 **Status:** v0.1.0 — first public release. Target and profile CRUD via TUI
 forms, live streaming scan view with real-time progress bar + ETA and
