@@ -44,14 +44,35 @@ impl Paths {
 pub struct AppConfig {
     #[serde(default)]
     pub ai: AiConfig,
+    #[serde(default)]
+    pub ui: UiConfig,
 }
 
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
             ai: AiConfig::default(),
+            ui: UiConfig::default(),
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UiConfig {
+    #[serde(default = "default_theme")]
+    pub theme: String,
+}
+
+impl Default for UiConfig {
+    fn default() -> Self {
+        Self {
+            theme: default_theme(),
+        }
+    }
+}
+
+fn default_theme() -> String {
+    "dark".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -117,8 +138,13 @@ enabled = false
 endpoint = "{}"
 model = "{}"
 timeout_secs = {}
+
+# UI — theme cycles with [t] at runtime and is persisted here.
+# Options: dark, solarized, dracula, nord, gruvbox
+[ui]
+theme = "{}"
 "#,
-            default.ai.endpoint, default.ai.model, default.ai.timeout_secs
+            default.ai.endpoint, default.ai.model, default.ai.timeout_secs, default.ui.theme
         );
         fs::write(path, text)?;
         return Ok(default);
@@ -128,6 +154,31 @@ timeout_secs = {}
     let cfg: AppConfig = toml::from_str(&text)
         .with_context(|| format!("parsing {}", path.display()))?;
     Ok(cfg)
+}
+
+pub fn save_app_config(path: &std::path::Path, cfg: &AppConfig) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).ok();
+    }
+    let text = toml::to_string_pretty(cfg).context("serializing config.toml")?;
+    let tmp = path.with_extension("toml.tmp");
+    fs::write(&tmp, text)?;
+    fs::rename(&tmp, path)?;
+    Ok(())
+}
+
+pub fn save_profiles(path: &std::path::Path, profiles: &[Profile]) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).ok();
+    }
+    let file = ProfilesFile {
+        profiles: profiles.to_vec(),
+    };
+    let text = toml::to_string_pretty(&file).context("serializing profiles.toml")?;
+    let tmp = path.with_extension("toml.tmp");
+    fs::write(&tmp, text)?;
+    fs::rename(&tmp, path)?;
+    Ok(())
 }
 
 #[derive(Serialize, Deserialize, Default)]

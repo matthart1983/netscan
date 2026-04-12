@@ -49,9 +49,14 @@ pub enum AiState {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FormMode {
     None,
-    Add,
-    Edit(usize),
-    DeleteConfirm(usize),
+    // Target groups
+    AddTarget,
+    EditTarget(usize),
+    DeleteTargetConfirm(usize),
+    // Scan profiles
+    AddProfile,
+    EditProfile(usize),
+    DeleteProfileConfirm(usize),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -144,6 +149,83 @@ impl TargetForm {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProfileFormField {
+    Name,
+    Description,
+    Flags,
+}
+
+impl ProfileFormField {
+    pub fn next(self) -> Self {
+        match self {
+            Self::Name => Self::Description,
+            Self::Description => Self::Flags,
+            Self::Flags => Self::Name,
+        }
+    }
+    pub fn prev(self) -> Self {
+        match self {
+            Self::Name => Self::Flags,
+            Self::Description => Self::Name,
+            Self::Flags => Self::Description,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ProfileForm {
+    pub field: ProfileFormField,
+    pub name: String,
+    pub description: String,
+    pub flags: String,
+    pub error: Option<String>,
+}
+
+impl ProfileForm {
+    pub fn empty() -> Self {
+        Self {
+            field: ProfileFormField::Name,
+            name: String::new(),
+            description: String::new(),
+            flags: String::new(),
+            error: None,
+        }
+    }
+
+    pub fn from_profile(p: &Profile) -> Self {
+        Self {
+            field: ProfileFormField::Name,
+            name: p.name.clone(),
+            description: p.description.clone(),
+            flags: p.flags.clone(),
+            error: None,
+        }
+    }
+
+    pub fn to_profile(&self) -> Result<Profile, String> {
+        let name = self.name.trim().to_string();
+        if name.is_empty() {
+            return Err("name is required".to_string());
+        }
+        let flags = self.flags.trim().to_string();
+        if flags.is_empty() {
+            return Err("flags are required (e.g. \"-T4 --top-ports 100\")".to_string());
+        }
+        // Simple sanity check: flags must not include output flags or target args.
+        if flags.contains(" -oX") || flags.starts_with("-oX") {
+            return Err(
+                "do not include -oX — netscan always appends -oX - automatically".to_string(),
+            );
+        }
+        Ok(Profile {
+            name,
+            description: self.description.trim().to_string(),
+            flags,
+        })
+    }
+}
+
 pub struct App {
     pub tab: Tab,
     pub targets: Vec<TargetGroup>,
@@ -180,9 +262,13 @@ pub struct App {
     pub ai_state: AiState,
     ai_rx: Option<Receiver<AiResult>>,
 
-    // Target CRUD form
+    // Target / profile CRUD forms
     pub form_mode: FormMode,
     pub form: TargetForm,
+    pub profile_form: ProfileForm,
+
+    // Active theme
+    pub theme: crate::theme::Theme,
 
     store: Store,
     paths: Paths,
@@ -233,6 +319,8 @@ impl App {
             ai_rx: None,
             form_mode: FormMode::None,
             form: TargetForm::empty(),
+            profile_form: ProfileForm::empty(),
+            theme: crate::theme::by_name(&config.ui.theme),
             store,
             paths,
             config,
@@ -498,6 +586,10 @@ impl App {
                 self.show_help = true;
                 return;
             }
+            (KeyCode::Char('t'), _) => {
+                self.cycle_theme();
+                return;
+            }
             (KeyCode::Char('1'), _) => {
                 self.tab = Tab::Targets;
                 return;
@@ -694,7 +786,7 @@ impl App {
 
     fn open_add_form(&mut self) {
         self.form = TargetForm::empty();
-        self.form_mode = FormMode::Add;
+        self.form_mode = FormMode::AddTarget;
     }
 
     fn open_edit_form(&mut self) {
@@ -702,59 +794,194 @@ impl App {
             return;
         };
         self.form = TargetForm::from_group(g);
-        self.form_mode = FormMode::Edit(self.target_index);
+        self.form_mode = FormMode::EditTarget(self.target_index);
     }
 
     fn open_delete_confirm(&mut self) {
         if self.targets.get(self.target_index).is_none() {
             return;
         }
-        self.form_mode = FormMode::DeleteConfirm(self.target_index);
+        self.form_mode = FormMode::DeleteTargetConfirm(self.target_index);
     }
 
     fn on_key_form(&mut self, key: KeyEvent) {
-        // Delete confirmation: y/Y confirms, anything else cancels.
-        if let FormMode::DeleteConfirm(idx) = self.form_mode {
-            match key.code {
-                KeyCode::Char('y') | KeyCode::Char('Y') => {
-                    self.delete_group(idx);
+        // Delete confirmations: y/Y confirms, anything else cancels.
+        match self.form_mode {
+            FormMode::DeleteTargetConfirm(idx) => {
+                match key.code {
+                    KeyCode::Char('y') | KeyCode::Char('Y') => self.delete_group(idx),
+                    _ => self.form_mode = FormMode::None,
                 }
-                _ => {
-                    self.form_mode = FormMode::None;
-                }
+                return;
             }
-            return;
+            FormMode::DeleteProfileConfirm(idx) => {
+                match key.code {
+                    KeyCode::Char('y') | KeyCode::Char('Y') => self.delete_profile(idx),
+                    _ => self.form_mode = FormMode::None,
+                }
+                return;
+            }
+            _ => {}
         }
 
-        // Add / Edit form.
+        let is_profile_form =
+            matches!(self.form_mode, FormMode::AddProfile | FormMode::EditProfile(_));
+
         match (key.code, key.modifiers) {
             (KeyCode::Esc, _) => {
                 self.form_mode = FormMode::None;
                 self.form.error = None;
+                self.profile_form.error = None;
             }
             (KeyCode::Char('s'), KeyModifiers::CONTROL) => {
-                self.submit_form();
+                if is_profile_form {
+                    self.submit_profile_form();
+                } else {
+                    self.submit_form();
+                }
             }
             (KeyCode::Tab, _) => {
-                self.form.field = self.form.field.next();
+                if is_profile_form {
+                    self.profile_form.field = self.profile_form.field.next();
+                } else {
+                    self.form.field = self.form.field.next();
+                }
             }
             (KeyCode::BackTab, _) => {
-                self.form.field = self.form.field.prev();
-            }
-            (KeyCode::Enter, _) => match self.form.field {
-                FormField::Name => self.form.field = FormField::Description,
-                FormField::Description => self.form.field = FormField::Targets,
-                FormField::Targets => {
-                    // Start a new target line.
-                    self.form.targets.push(String::new());
+                if is_profile_form {
+                    self.profile_form.field = self.profile_form.field.prev();
+                } else {
+                    self.form.field = self.form.field.prev();
                 }
-            },
-            (KeyCode::Backspace, _) => self.form_backspace(),
+            }
+            (KeyCode::Enter, _) => {
+                if is_profile_form {
+                    self.profile_form.field = match self.profile_form.field {
+                        ProfileFormField::Name => ProfileFormField::Description,
+                        ProfileFormField::Description => ProfileFormField::Flags,
+                        ProfileFormField::Flags => ProfileFormField::Name,
+                    };
+                } else {
+                    match self.form.field {
+                        FormField::Name => self.form.field = FormField::Description,
+                        FormField::Description => self.form.field = FormField::Targets,
+                        FormField::Targets => self.form.targets.push(String::new()),
+                    }
+                }
+            }
+            (KeyCode::Backspace, _) => {
+                if is_profile_form {
+                    self.profile_form_backspace();
+                } else {
+                    self.form_backspace();
+                }
+            }
             (KeyCode::Char(c), m) if !m.contains(KeyModifiers::CONTROL) => {
-                self.form_insert_char(c);
+                if is_profile_form {
+                    self.profile_form_insert_char(c);
+                } else {
+                    self.form_insert_char(c);
+                }
             }
             _ => {}
         }
+    }
+
+    fn profile_form_insert_char(&mut self, c: char) {
+        match self.profile_form.field {
+            ProfileFormField::Name => self.profile_form.name.push(c),
+            ProfileFormField::Description => self.profile_form.description.push(c),
+            ProfileFormField::Flags => self.profile_form.flags.push(c),
+        }
+    }
+
+    fn profile_form_backspace(&mut self) {
+        match self.profile_form.field {
+            ProfileFormField::Name => {
+                self.profile_form.name.pop();
+            }
+            ProfileFormField::Description => {
+                self.profile_form.description.pop();
+            }
+            ProfileFormField::Flags => {
+                self.profile_form.flags.pop();
+            }
+        }
+    }
+
+    fn submit_profile_form(&mut self) {
+        let profile = match self.profile_form.to_profile() {
+            Ok(p) => p,
+            Err(e) => {
+                self.profile_form.error = Some(e);
+                return;
+            }
+        };
+
+        let edit_idx = if let FormMode::EditProfile(i) = self.form_mode {
+            Some(i)
+        } else {
+            None
+        };
+        if self
+            .profiles
+            .iter()
+            .enumerate()
+            .any(|(i, p)| p.name == profile.name && Some(i) != edit_idx)
+        {
+            self.profile_form.error =
+                Some(format!("a profile named \"{}\" already exists", profile.name));
+            return;
+        }
+
+        match self.form_mode {
+            FormMode::AddProfile => {
+                self.profiles.push(profile);
+                self.profile_index = self.profiles.len() - 1;
+            }
+            FormMode::EditProfile(i) => {
+                if let Some(slot) = self.profiles.get_mut(i) {
+                    *slot = profile;
+                }
+            }
+            _ => {}
+        }
+
+        if let Err(e) = crate::config::save_profiles(&self.paths.profiles_file, &self.profiles) {
+            self.profile_form.error = Some(format!("save failed: {e}"));
+            return;
+        }
+
+        let msg = match self.form_mode {
+            FormMode::AddProfile => "profile added",
+            FormMode::EditProfile(_) => "profile updated",
+            _ => "saved",
+        };
+        self.toast = Some((msg.to_string(), Instant::now()));
+        self.form_mode = FormMode::None;
+        self.profile_form.error = None;
+    }
+
+    fn delete_profile(&mut self, idx: usize) {
+        if idx >= self.profiles.len() {
+            self.form_mode = FormMode::None;
+            return;
+        }
+        let removed = self.profiles.remove(idx);
+        if self.profile_index >= self.profiles.len() && !self.profiles.is_empty() {
+            self.profile_index = self.profiles.len() - 1;
+        } else if self.profiles.is_empty() {
+            self.profile_index = 0;
+        }
+        if let Err(e) = crate::config::save_profiles(&self.paths.profiles_file, &self.profiles) {
+            self.scan_error = Some(format!("save failed: {e}"));
+        } else {
+            self.toast = Some((
+                format!("deleted \"{}\"", removed.name),
+                Instant::now(),
+            ));
+        }
+        self.form_mode = FormMode::None;
     }
 
     fn form_insert_char(&mut self, c: char) {
@@ -806,7 +1033,7 @@ impl App {
         };
 
         // Uniqueness check — name must not collide with another group.
-        let edit_idx = if let FormMode::Edit(i) = self.form_mode {
+        let edit_idx = if let FormMode::EditTarget(i) = self.form_mode {
             Some(i)
         } else {
             None
@@ -820,11 +1047,11 @@ impl App {
         }
 
         match self.form_mode {
-            FormMode::Add => {
+            FormMode::AddTarget => {
                 self.targets.push(group);
                 self.target_index = self.targets.len() - 1;
             }
-            FormMode::Edit(i) => {
+            FormMode::EditTarget(i) => {
                 if let Some(slot) = self.targets.get_mut(i) {
                     *slot = group;
                 }
@@ -838,8 +1065,8 @@ impl App {
         }
 
         let msg = match self.form_mode {
-            FormMode::Add => "target group added",
-            FormMode::Edit(_) => "target group updated",
+            FormMode::AddTarget => "target group added",
+            FormMode::EditTarget(_) => "target group updated",
             _ => "saved",
         };
         self.toast = Some((msg.to_string(), Instant::now()));
@@ -884,8 +1111,48 @@ impl App {
             KeyCode::Enter => {
                 self.start_scan();
             }
+            KeyCode::Char('a') => {
+                self.open_add_profile_form();
+            }
+            KeyCode::Char('e') => {
+                self.open_edit_profile_form();
+            }
+            KeyCode::Char('d') => {
+                self.open_delete_profile_confirm();
+            }
             _ => {}
         }
+    }
+
+    fn open_add_profile_form(&mut self) {
+        self.profile_form = ProfileForm::empty();
+        self.form_mode = FormMode::AddProfile;
+    }
+
+    fn open_edit_profile_form(&mut self) {
+        let Some(p) = self.profiles.get(self.profile_index) else {
+            return;
+        };
+        self.profile_form = ProfileForm::from_profile(p);
+        self.form_mode = FormMode::EditProfile(self.profile_index);
+    }
+
+    fn open_delete_profile_confirm(&mut self) {
+        if self.profiles.get(self.profile_index).is_none() {
+            return;
+        }
+        self.form_mode = FormMode::DeleteProfileConfirm(self.profile_index);
+    }
+
+    fn cycle_theme(&mut self) {
+        let next = crate::theme::next(self.theme.name);
+        self.theme = next;
+        self.config.ui.theme = next.name.to_string();
+        if let Err(e) = crate::config::save_app_config(&self.paths.config_file, &self.config) {
+            self.scan_error = Some(format!("save theme: {e}"));
+            return;
+        }
+        self.toast = Some((format!("theme: {}", next.name), Instant::now()));
     }
 
     fn on_key_scan(&mut self, key: KeyEvent) {
@@ -1237,6 +1504,67 @@ mod tests {
         assert_eq!(g2.name, g.name);
         assert_eq!(g2.description, g.description);
         assert_eq!(g2.targets, g.targets);
+    }
+
+    #[test]
+    fn profile_form_requires_name_and_flags() {
+        let f = ProfileForm::empty();
+        assert!(f.to_profile().is_err());
+        let mut f = ProfileForm::empty();
+        f.name = "quick".to_string();
+        assert!(f.to_profile().is_err()); // missing flags
+        f.flags = "-T4 --top-ports 100".to_string();
+        let p = f.to_profile().unwrap();
+        assert_eq!(p.name, "quick");
+        assert_eq!(p.flags, "-T4 --top-ports 100");
+    }
+
+    #[test]
+    fn profile_form_rejects_explicit_output_flag() {
+        let mut f = ProfileForm::empty();
+        f.name = "bad".to_string();
+        f.flags = "-T4 -oX out.xml".to_string();
+        assert!(f.to_profile().is_err());
+    }
+
+    #[test]
+    fn profile_form_from_profile_roundtrips() {
+        let p = Profile {
+            name: "ssl-audit".to_string(),
+            description: "TLS checks".to_string(),
+            flags: "-p 443 --script ssl-enum-ciphers".to_string(),
+        };
+        let f = ProfileForm::from_profile(&p);
+        let p2 = f.to_profile().unwrap();
+        assert_eq!(p2.name, p.name);
+        assert_eq!(p2.description, p.description);
+        assert_eq!(p2.flags, p.flags);
+    }
+
+    #[test]
+    fn save_and_load_profiles_roundtrip() {
+        let tmp = std::env::temp_dir().join(format!(
+            "netscan-profiles-{}.toml",
+            crate::history::short_id()
+        ));
+        let profiles = vec![
+            Profile {
+                name: "quick".to_string(),
+                description: "fast".to_string(),
+                flags: "-T4 --top-ports 100".to_string(),
+            },
+            Profile {
+                name: "full".to_string(),
+                description: "".to_string(),
+                flags: "-T4 -p- -sV".to_string(),
+            },
+        ];
+        crate::config::save_profiles(&tmp, &profiles).unwrap();
+        let loaded = crate::config::load_profiles(&tmp).unwrap();
+        assert_eq!(loaded.len(), 2);
+        assert_eq!(loaded[0].name, "quick");
+        assert_eq!(loaded[1].flags, "-T4 -p- -sV");
+        std::fs::remove_file(&tmp).ok();
     }
 
     #[test]

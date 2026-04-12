@@ -1,6 +1,9 @@
-use crate::app::{AiState, App, FormField, FormMode, ScanState, Tab};
+use crate::app::{
+    AiState, App, FormField, FormMode, ProfileFormField, ScanState, Tab,
+};
 use crate::diff::{HostChangeKind, PortChangeKind, ScanDiff};
 use crate::history::{self, ScanSummary};
+use crate::theme::{self, Theme};
 use crate::types::{Host, HostStatus, Port, PortState};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -10,15 +13,35 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Tabs, Wrap};
 use ratatui::Frame;
 
-const ACCENT: Color = Color::Rgb(61, 214, 198);
-const DIM: Color = Color::Rgb(144, 166, 185);
-const BORDER: Color = Color::Rgb(60, 80, 98);
-const TEXT: Color = Color::Rgb(237, 246, 251);
-const DANGER: Color = Color::Rgb(251, 113, 133);
-const WARN: Color = Color::Rgb(245, 182, 77);
-const OK: Color = Color::Rgb(110, 231, 183);
+// Runtime-switchable theme. `render(&mut Frame, &App)` sets this once per
+// frame; every helper below reads it via these accessors. Single-threaded
+// by construction (the TUI event loop).
+thread_local! {
+    static CURRENT_THEME: std::cell::Cell<Theme> = std::cell::Cell::new(theme::DARK);
+}
+
+fn set_theme(t: Theme) { CURRENT_THEME.with(|c| c.set(t)); }
+fn theme_now() -> Theme { CURRENT_THEME.with(|c| c.get()) }
+
+#[allow(non_snake_case)]
+fn ACCENT() -> Color { theme_now().accent }
+#[allow(non_snake_case)]
+fn DIM() -> Color { theme_now().dim }
+#[allow(non_snake_case)]
+fn BORDER() -> Color { theme_now().border }
+#[allow(non_snake_case)]
+fn TEXT() -> Color { theme_now().text }
+#[allow(non_snake_case)]
+fn DANGER() -> Color { theme_now().danger }
+#[allow(non_snake_case)]
+fn WARN() -> Color { theme_now().warn }
+#[allow(non_snake_case)]
+fn OK() -> Color { theme_now().ok }
+#[allow(non_snake_case)]
+fn SELECTION_BG() -> Color { theme_now().selection_bg }
 
 pub fn render(f: &mut Frame, app: &App) {
+    set_theme(app.theme);
     let area = f.area();
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -40,8 +63,18 @@ pub fn render(f: &mut Frame, app: &App) {
 
     match &app.form_mode {
         FormMode::None => {}
-        FormMode::Add | FormMode::Edit(_) => render_target_form_overlay(f, app, area),
-        FormMode::DeleteConfirm(_) => render_delete_confirm_overlay(f, app, area),
+        FormMode::AddTarget | FormMode::EditTarget(_) => {
+            render_target_form_overlay(f, app, area)
+        }
+        FormMode::DeleteTargetConfirm(_) => {
+            render_delete_confirm_overlay(f, app, area, false)
+        }
+        FormMode::AddProfile | FormMode::EditProfile(_) => {
+            render_profile_form_overlay(f, app, area)
+        }
+        FormMode::DeleteProfileConfirm(_) => {
+            render_delete_confirm_overlay(f, app, area, true)
+        }
     }
 
     if app.show_help {
@@ -57,9 +90,9 @@ fn render_header(f: &mut Frame, app: &App, area: Rect) {
             Line::from(vec![
                 Span::styled(
                     format!("[{}] ", i + 1),
-                    Style::default().fg(DIM),
+                    Style::default().fg(DIM()),
                 ),
-                Span::styled(t.label(), Style::default().fg(TEXT)),
+                Span::styled(t.label(), Style::default().fg(TEXT())),
             ])
         })
         .collect::<Vec<_>>();
@@ -73,20 +106,20 @@ fn render_header(f: &mut Frame, app: &App, area: Rect) {
 
     let tabs = Tabs::new(titles)
         .select(selected)
-        .style(Style::default().fg(TEXT))
+        .style(Style::default().fg(TEXT()))
         .highlight_style(
             Style::default()
-                .fg(ACCENT)
+                .fg(ACCENT())
                 .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
         )
-        .divider(Span::styled("│", Style::default().fg(BORDER)))
+        .divider(Span::styled("│", Style::default().fg(BORDER())))
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(BORDER))
+                .border_style(Style::default().fg(BORDER()))
                 .title(Line::from(vec![
-                    Span::styled(" netscan ", Style::default().fg(ACCENT).bold()),
-                    Span::styled("· nmap workflow TUI ", Style::default().fg(DIM)),
+                    Span::styled(" netscan ", Style::default().fg(ACCENT()).bold()),
+                    Span::styled("· nmap workflow TUI ", Style::default().fg(DIM())),
                 ])),
         );
 
@@ -106,11 +139,11 @@ fn render_targets(f: &mut Frame, app: &App, area: Rect) {
             ListItem::new(Line::from(vec![
                 Span::styled(
                     format!(" {} ", g.name),
-                    Style::default().fg(TEXT).bold(),
+                    Style::default().fg(TEXT()).bold(),
                 ),
                 Span::styled(
                     format!("({})", g.targets.len()),
-                    Style::default().fg(DIM),
+                    Style::default().fg(DIM()),
                 ),
             ]))
         })
@@ -120,13 +153,13 @@ fn render_targets(f: &mut Frame, app: &App, area: Rect) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(BORDER))
+                .border_style(Style::default().fg(BORDER()))
                 .title(" Target groups "),
         )
         .highlight_style(
             Style::default()
-                .bg(Color::Rgb(18, 42, 54))
-                .fg(ACCENT)
+                .bg(SELECTION_BG())
+                .fg(ACCENT())
                 .add_modifier(Modifier::BOLD),
         )
         .highlight_symbol("▸ ");
@@ -140,55 +173,55 @@ fn render_targets(f: &mut Frame, app: &App, area: Rect) {
         let mut lines = vec![
             Line::from(vec![Span::styled(
                 format!(" {}", g.name),
-                Style::default().fg(ACCENT).bold(),
+                Style::default().fg(ACCENT()).bold(),
             )]),
             Line::from(Span::styled(
                 format!("   {}", g.description),
-                Style::default().fg(DIM),
+                Style::default().fg(DIM()),
             )),
             Line::raw(""),
             Line::from(Span::styled(
                 " Targets:",
-                Style::default().fg(TEXT).bold(),
+                Style::default().fg(TEXT()).bold(),
             )),
         ];
         for t in &g.targets {
             lines.push(Line::from(Span::styled(
                 format!("   • {t}"),
-                Style::default().fg(TEXT),
+                Style::default().fg(TEXT()),
             )));
         }
         lines.push(Line::raw(""));
         if let Some(p) = app.current_profile() {
             lines.push(Line::from(Span::styled(
                 " Selected profile:",
-                Style::default().fg(TEXT).bold(),
+                Style::default().fg(TEXT()).bold(),
             )));
             lines.push(Line::from(vec![
-                Span::styled(format!("   {} ", p.name), Style::default().fg(ACCENT)),
-                Span::styled(p.description.clone(), Style::default().fg(DIM)),
+                Span::styled(format!("   {} ", p.name), Style::default().fg(ACCENT())),
+                Span::styled(p.description.clone(), Style::default().fg(DIM())),
             ]));
             lines.push(Line::raw(""));
             lines.push(Line::from(Span::styled(
                 " Command preview:",
-                Style::default().fg(TEXT).bold(),
+                Style::default().fg(TEXT()).bold(),
             )));
             let args = crate::nmap::build_command(p, g);
             lines.push(Line::from(Span::styled(
                 format!("   nmap {}", args.join(" ")),
-                Style::default().fg(OK),
+                Style::default().fg(OK()),
             )));
         }
         lines.push(Line::raw(""));
         lines.push(Line::from(Span::styled(
             " Enter — run scan   [2] — pick profile",
-            Style::default().fg(DIM),
+            Style::default().fg(DIM()),
         )));
         lines
     } else {
         vec![Line::from(Span::styled(
             "No target groups configured",
-            Style::default().fg(WARN),
+            Style::default().fg(WARN()),
         ))]
     };
 
@@ -196,7 +229,7 @@ fn render_targets(f: &mut Frame, app: &App, area: Rect) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(BORDER))
+                .border_style(Style::default().fg(BORDER()))
                 .title(" Details "),
         )
         .wrap(Wrap { trim: false });
@@ -215,7 +248,7 @@ fn render_profiles(f: &mut Frame, app: &App, area: Rect) {
         .map(|p| {
             ListItem::new(Line::from(vec![Span::styled(
                 format!(" {} ", p.name),
-                Style::default().fg(TEXT).bold(),
+                Style::default().fg(TEXT()).bold(),
             )]))
         })
         .collect();
@@ -224,13 +257,13 @@ fn render_profiles(f: &mut Frame, app: &App, area: Rect) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(BORDER))
+                .border_style(Style::default().fg(BORDER()))
                 .title(" Profiles "),
         )
         .highlight_style(
             Style::default()
-                .bg(Color::Rgb(18, 42, 54))
-                .fg(ACCENT)
+                .bg(SELECTION_BG())
+                .fg(ACCENT())
                 .add_modifier(Modifier::BOLD),
         )
         .highlight_symbol("▸ ");
@@ -243,35 +276,35 @@ fn render_profiles(f: &mut Frame, app: &App, area: Rect) {
         vec![
             Line::from(Span::styled(
                 format!(" {}", p.name),
-                Style::default().fg(ACCENT).bold(),
+                Style::default().fg(ACCENT()).bold(),
             )),
             Line::from(Span::styled(
                 format!("   {}", p.description),
-                Style::default().fg(DIM),
+                Style::default().fg(DIM()),
             )),
             Line::raw(""),
-            Line::from(Span::styled(" Flags:", Style::default().fg(TEXT).bold())),
+            Line::from(Span::styled(" Flags:", Style::default().fg(TEXT()).bold())),
             Line::from(Span::styled(
                 format!("   {}", p.flags),
-                Style::default().fg(OK),
+                Style::default().fg(OK()),
             )),
             Line::raw(""),
             Line::from(Span::styled(
                 " Enter — run against selected target group",
-                Style::default().fg(DIM),
+                Style::default().fg(DIM()),
             )),
         ]
     } else {
         vec![Line::from(Span::styled(
             "No profiles configured",
-            Style::default().fg(WARN),
+            Style::default().fg(WARN()),
         ))]
     };
 
     let para = Paragraph::new(detail_lines).block(
         Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(BORDER))
+            .border_style(Style::default().fg(BORDER()))
             .title(" Details "),
     );
     f.render_widget(para, chunks[1]);
@@ -335,36 +368,36 @@ fn ai_pane_height(app: &App) -> u16 {
 
 fn render_ai_pane(f: &mut Frame, app: &App, area: Rect) {
     let title = Line::from(vec![
-        Span::styled(" AI triage ", Style::default().fg(ACCENT).bold()),
+        Span::styled(" AI triage ", Style::default().fg(ACCENT()).bold()),
         Span::styled(
             format!("· {} ", app_model_label(app)),
-            Style::default().fg(DIM),
+            Style::default().fg(DIM()),
         ),
     ]);
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(ACCENT))
+        .border_style(Style::default().fg(ACCENT()))
         .title(title);
 
     let lines: Vec<Line> = match &app.ai_state {
         AiState::Off => vec![],
         AiState::Pending => vec![Line::from(Span::styled(
             " analyzing scan… ",
-            Style::default().fg(DIM),
+            Style::default().fg(DIM()),
         ))],
         AiState::Ready(text) => text
             .lines()
-            .map(|l| Line::from(Span::styled(format!(" {l}"), Style::default().fg(TEXT))))
+            .map(|l| Line::from(Span::styled(format!(" {l}"), Style::default().fg(TEXT()))))
             .collect(),
         AiState::Failed(err) => vec![
             Line::from(Span::styled(
                 " AI triage failed",
-                Style::default().fg(DANGER).bold(),
+                Style::default().fg(DANGER()).bold(),
             )),
-            Line::from(Span::styled(format!(" {err}"), Style::default().fg(DIM))),
+            Line::from(Span::styled(format!(" {err}"), Style::default().fg(DIM()))),
             Line::from(Span::styled(
                 " check ~/.config/netscan/config.toml — endpoint, model, or Ollama daemon",
-                Style::default().fg(DIM),
+                Style::default().fg(DIM()),
             )),
         ],
     };
@@ -387,20 +420,20 @@ fn app_model_label(app: &App) -> &str {
 fn render_diff_pane(f: &mut Frame, diff: &ScanDiff, area: Rect) {
     let mut lines: Vec<Line> = Vec::new();
     lines.push(Line::from(vec![
-        Span::styled(" Changes since ", Style::default().fg(DIM)),
+        Span::styled(" Changes since ", Style::default().fg(DIM())),
         Span::styled(
             history::format_timestamp(diff.prev_started),
-            Style::default().fg(TEXT),
+            Style::default().fg(TEXT()),
         ),
-        Span::styled("  — ", Style::default().fg(DIM)),
-        Span::styled(diff.summary(), Style::default().fg(ACCENT).bold()),
+        Span::styled("  — ", Style::default().fg(DIM())),
+        Span::styled(diff.summary(), Style::default().fg(ACCENT()).bold()),
     ]));
     for hc in diff.host_changes.iter().take(8) {
         let (tag, color) = match hc.kind {
-            HostChangeKind::New => ("+ NEW    ", OK),
-            HostChangeKind::Removed => ("- RMV    ", DANGER),
-            HostChangeKind::StatusChanged => ("~ STATUS ", WARN),
-            HostChangeKind::Modified => ("~ MOD    ", WARN),
+            HostChangeKind::New => ("+ NEW    ", OK()),
+            HostChangeKind::Removed => ("- RMV    ", DANGER()),
+            HostChangeKind::StatusChanged => ("~ STATUS ", WARN()),
+            HostChangeKind::Modified => ("~ MOD    ", WARN()),
             HostChangeKind::Unchanged => continue,
         };
         let host_label = match &hc.hostname {
@@ -409,7 +442,7 @@ fn render_diff_pane(f: &mut Frame, diff: &ScanDiff, area: Rect) {
         };
         let mut spans = vec![
             Span::styled(tag, Style::default().fg(color).bold()),
-            Span::styled(host_label, Style::default().fg(TEXT)),
+            Span::styled(host_label, Style::default().fg(TEXT())),
         ];
         if !hc.port_changes.is_empty() {
             let openings = hc
@@ -449,7 +482,7 @@ fn render_diff_pane(f: &mut Frame, diff: &ScanDiff, area: Rect) {
                 spans.push(Span::raw("  "));
                 spans.push(Span::styled(
                     format!("[{}]", bits.join(" ")),
-                    Style::default().fg(DIM),
+                    Style::default().fg(DIM()),
                 ));
             }
         }
@@ -458,13 +491,13 @@ fn render_diff_pane(f: &mut Frame, diff: &ScanDiff, area: Rect) {
     if diff.host_changes.len() > 8 {
         lines.push(Line::from(Span::styled(
             format!("  … and {} more. Open in History for full diff.", diff.host_changes.len() - 8),
-            Style::default().fg(DIM),
+            Style::default().fg(DIM()),
         )));
     }
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(ACCENT))
+        .border_style(Style::default().fg(ACCENT()))
         .title(" Diff ");
     let para = Paragraph::new(lines).block(block).wrap(Wrap { trim: false });
     f.render_widget(para, area);
@@ -472,37 +505,37 @@ fn render_diff_pane(f: &mut Frame, diff: &ScanDiff, area: Rect) {
 
 fn render_scan_summary(f: &mut Frame, app: &App, area: Rect) {
     let state_str = match app.scan_state {
-        ScanState::Idle => Span::styled(" idle ", Style::default().fg(DIM)),
+        ScanState::Idle => Span::styled(" idle ", Style::default().fg(DIM())),
         ScanState::Running => Span::styled(
             " running ",
-            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+            Style::default().fg(ACCENT()).add_modifier(Modifier::BOLD),
         ),
         ScanState::Finished => Span::styled(
             " finished ",
-            Style::default().fg(OK).add_modifier(Modifier::BOLD),
+            Style::default().fg(OK()).add_modifier(Modifier::BOLD),
         ),
         ScanState::Failed => Span::styled(
             " failed ",
-            Style::default().fg(DANGER).add_modifier(Modifier::BOLD),
+            Style::default().fg(DANGER()).add_modifier(Modifier::BOLD),
         ),
     };
 
     let elapsed = format!("{:>02}:{:>02}", app.scan_elapsed.as_secs() / 60, app.scan_elapsed.as_secs() % 60);
 
     let header = Line::from(vec![
-        Span::styled(" state: ", Style::default().fg(DIM)),
+        Span::styled(" state: ", Style::default().fg(DIM())),
         state_str,
-        Span::styled("  elapsed: ", Style::default().fg(DIM)),
-        Span::styled(elapsed, Style::default().fg(TEXT)),
-        Span::styled("  hosts: ", Style::default().fg(DIM)),
+        Span::styled("  elapsed: ", Style::default().fg(DIM())),
+        Span::styled(elapsed, Style::default().fg(TEXT())),
+        Span::styled("  hosts: ", Style::default().fg(DIM())),
         Span::styled(
             format!("{}", app.scan_hosts.len()),
-            Style::default().fg(TEXT),
+            Style::default().fg(TEXT()),
         ),
         if app.hosts_up + app.hosts_down > 0 {
             Span::styled(
                 format!("  (up {} / down {})", app.hosts_up, app.hosts_down),
-                Style::default().fg(DIM),
+                Style::default().fg(DIM()),
             )
         } else {
             Span::raw("")
@@ -515,14 +548,14 @@ fn render_scan_summary(f: &mut Frame, app: &App, area: Rect) {
         app.scan_command.clone()
     };
     let cmd = Line::from(vec![
-        Span::styled(" cmd:   ", Style::default().fg(DIM)),
-        Span::styled(command_line, Style::default().fg(OK)),
+        Span::styled(" cmd:   ", Style::default().fg(DIM())),
+        Span::styled(command_line, Style::default().fg(OK())),
     ]);
 
     let para = Paragraph::new(vec![header, cmd]).block(
         Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(BORDER))
+            .border_style(Style::default().fg(BORDER()))
             .title(" Scan "),
     );
     f.render_widget(para, area);
@@ -534,9 +567,9 @@ fn render_host_list(f: &mut Frame, app: &App, area: Rect) {
         .iter()
         .map(|h| {
             let dot = match h.status {
-                HostStatus::Up => Span::styled("● ", Style::default().fg(OK)),
-                HostStatus::Down => Span::styled("● ", Style::default().fg(DANGER)),
-                HostStatus::Unknown => Span::styled("● ", Style::default().fg(DIM)),
+                HostStatus::Up => Span::styled("● ", Style::default().fg(OK())),
+                HostStatus::Down => Span::styled("● ", Style::default().fg(DANGER())),
+                HostStatus::Unknown => Span::styled("● ", Style::default().fg(DIM())),
             };
             let label = match &h.hostname {
                 Some(hn) => format!("{hn} ({})", h.address),
@@ -545,11 +578,11 @@ fn render_host_list(f: &mut Frame, app: &App, area: Rect) {
             let open_ports = h.ports.iter().filter(|p| p.state == PortState::Open).count();
             ListItem::new(Line::from(vec![
                 dot,
-                Span::styled(label, Style::default().fg(TEXT)),
+                Span::styled(label, Style::default().fg(TEXT())),
                 Span::raw("  "),
                 Span::styled(
                     format!("{} open", open_ports),
-                    Style::default().fg(DIM),
+                    Style::default().fg(DIM()),
                 ),
             ]))
         })
@@ -557,7 +590,7 @@ fn render_host_list(f: &mut Frame, app: &App, area: Rect) {
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(BORDER))
+        .border_style(Style::default().fg(BORDER()))
         .title(" Hosts ");
 
     if items.is_empty() {
@@ -568,7 +601,7 @@ fn render_host_list(f: &mut Frame, app: &App, area: Rect) {
             ScanState::Failed => "Scan failed. See status bar.",
         };
         let para = Paragraph::new(msg)
-            .style(Style::default().fg(DIM))
+            .style(Style::default().fg(DIM()))
             .block(block);
         f.render_widget(para, area);
         return;
@@ -578,8 +611,8 @@ fn render_host_list(f: &mut Frame, app: &App, area: Rect) {
         .block(block)
         .highlight_style(
             Style::default()
-                .bg(Color::Rgb(18, 42, 54))
-                .fg(ACCENT)
+                .bg(SELECTION_BG())
+                .fg(ACCENT())
                 .add_modifier(Modifier::BOLD),
         )
         .highlight_symbol("▸ ");
@@ -592,7 +625,7 @@ fn render_host_list(f: &mut Frame, app: &App, area: Rect) {
 fn render_host_detail(f: &mut Frame, app: &App, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(BORDER))
+        .border_style(Style::default().fg(BORDER()))
         .title(" Ports & scripts ");
 
     let lines: Vec<Line> = if let Some(host) = app.current_host() {
@@ -601,7 +634,7 @@ fn render_host_detail(f: &mut Frame, app: &App, area: Rect) {
         if let Some(os) = &host.os_guess {
             lines.push(Line::from(Span::styled(
                 format!(" OS guess: {os}"),
-                Style::default().fg(DIM),
+                Style::default().fg(DIM()),
             )));
         }
         lines.push(Line::raw(""));
@@ -609,12 +642,12 @@ fn render_host_detail(f: &mut Frame, app: &App, area: Rect) {
         if host.ports.is_empty() {
             lines.push(Line::from(Span::styled(
                 " (no ports reported)",
-                Style::default().fg(DIM),
+                Style::default().fg(DIM()),
             )));
         } else {
             lines.push(Line::from(Span::styled(
                 " PORT       STATE     SERVICE                VERSION",
-                Style::default().fg(DIM).add_modifier(Modifier::BOLD),
+                Style::default().fg(DIM()).add_modifier(Modifier::BOLD),
             )));
             for p in &host.ports {
                 lines.push(port_line(p));
@@ -626,8 +659,8 @@ fn render_host_detail(f: &mut Frame, app: &App, area: Rect) {
                             "       ".to_string()
                         };
                         lines.push(Line::from(vec![
-                            Span::styled(prefix, Style::default().fg(WARN)),
-                            Span::styled(l.to_string(), Style::default().fg(DIM)),
+                            Span::styled(prefix, Style::default().fg(WARN())),
+                            Span::styled(l.to_string(), Style::default().fg(DIM())),
                         ]));
                     }
                 }
@@ -637,7 +670,7 @@ fn render_host_detail(f: &mut Frame, app: &App, area: Rect) {
     } else {
         vec![Line::from(Span::styled(
             "Select a host on the left.",
-            Style::default().fg(DIM),
+            Style::default().fg(DIM()),
         ))]
     };
 
@@ -647,30 +680,30 @@ fn render_host_detail(f: &mut Frame, app: &App, area: Rect) {
 
 fn host_header_line(host: &Host) -> Line<'static> {
     let status_span = match host.status {
-        HostStatus::Up => Span::styled(" up ", Style::default().fg(OK).bold()),
-        HostStatus::Down => Span::styled(" down ", Style::default().fg(DANGER).bold()),
-        HostStatus::Unknown => Span::styled(" unknown ", Style::default().fg(DIM)),
+        HostStatus::Up => Span::styled(" up ", Style::default().fg(OK()).bold()),
+        HostStatus::Down => Span::styled(" down ", Style::default().fg(DANGER()).bold()),
+        HostStatus::Unknown => Span::styled(" unknown ", Style::default().fg(DIM())),
     };
     let mut spans = vec![
         Span::styled(
             format!(" {} ", host.address),
-            Style::default().fg(ACCENT).bold(),
+            Style::default().fg(ACCENT()).bold(),
         ),
         status_span,
     ];
     if let Some(hn) = &host.hostname {
         spans.push(Span::raw("  "));
-        spans.push(Span::styled(hn.clone(), Style::default().fg(DIM)));
+        spans.push(Span::styled(hn.clone(), Style::default().fg(DIM())));
     }
     Line::from(spans)
 }
 
 fn port_line(p: &Port) -> Line<'static> {
     let state_color = match p.state {
-        PortState::Open => OK,
-        PortState::Closed => DIM,
-        PortState::Filtered => WARN,
-        PortState::Other => DIM,
+        PortState::Open => OK(),
+        PortState::Closed => DIM(),
+        PortState::Filtered => WARN(),
+        PortState::Other => DIM(),
     };
     let port_col = format!(" {}/{:<6}", p.port, p.protocol);
     let state_col = format!("{:<10}", p.state.label());
@@ -683,10 +716,10 @@ fn port_line(p: &Port) -> Line<'static> {
     };
 
     Line::from(vec![
-        Span::styled(port_col, Style::default().fg(TEXT)),
+        Span::styled(port_col, Style::default().fg(TEXT())),
         Span::styled(state_col, Style::default().fg(state_color)),
-        Span::styled(service_col, Style::default().fg(TEXT)),
-        Span::styled(version, Style::default().fg(DIM)),
+        Span::styled(service_col, Style::default().fg(TEXT())),
+        Span::styled(version, Style::default().fg(DIM())),
     ])
 }
 
@@ -703,46 +736,46 @@ fn render_history(f: &mut Frame, app: &App, area: Rect) {
 fn render_full_diff(f: &mut Frame, diff: &ScanDiff, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(ACCENT))
+        .border_style(Style::default().fg(ACCENT()))
         .title(Line::from(vec![
-            Span::styled(" Diff view ", Style::default().fg(ACCENT).bold()),
-            Span::styled("(Esc to close)", Style::default().fg(DIM)),
+            Span::styled(" Diff view ", Style::default().fg(ACCENT()).bold()),
+            Span::styled("(Esc to close)", Style::default().fg(DIM())),
         ]));
 
     let mut lines: Vec<Line> = Vec::new();
     lines.push(Line::from(vec![
-        Span::styled(" prev: ", Style::default().fg(DIM)),
+        Span::styled(" prev: ", Style::default().fg(DIM())),
         Span::styled(
             format!("{}  ({})", &diff.prev_id[..diff.prev_id.len().min(8)], history::format_timestamp(diff.prev_started)),
-            Style::default().fg(TEXT),
+            Style::default().fg(TEXT()),
         ),
     ]));
     lines.push(Line::from(vec![
-        Span::styled(" curr: ", Style::default().fg(DIM)),
+        Span::styled(" curr: ", Style::default().fg(DIM())),
         Span::styled(
             &diff.curr_id[..diff.curr_id.len().min(8)],
-            Style::default().fg(TEXT),
+            Style::default().fg(TEXT()),
         ),
     ]));
     lines.push(Line::from(vec![
-        Span::styled(" summary: ", Style::default().fg(DIM)),
-        Span::styled(diff.summary(), Style::default().fg(ACCENT).bold()),
+        Span::styled(" summary: ", Style::default().fg(DIM())),
+        Span::styled(diff.summary(), Style::default().fg(ACCENT()).bold()),
     ]));
     lines.push(Line::raw(""));
 
     if diff.is_empty() {
         lines.push(Line::from(Span::styled(
             "No changes between these scans.",
-            Style::default().fg(DIM),
+            Style::default().fg(DIM()),
         )));
     }
 
     for hc in &diff.host_changes {
         let (tag, color) = match hc.kind {
-            HostChangeKind::New => ("+ NEW   ", OK),
-            HostChangeKind::Removed => ("- RMV   ", DANGER),
-            HostChangeKind::StatusChanged => ("~ STATUS", WARN),
-            HostChangeKind::Modified => ("~ MOD   ", WARN),
+            HostChangeKind::New => ("+ NEW   ", OK()),
+            HostChangeKind::Removed => ("- RMV   ", DANGER()),
+            HostChangeKind::StatusChanged => ("~ STATUS", WARN()),
+            HostChangeKind::Modified => ("~ MOD   ", WARN()),
             HostChangeKind::Unchanged => continue,
         };
         let host_label = match &hc.hostname {
@@ -753,13 +786,13 @@ fn render_full_diff(f: &mut Frame, diff: &ScanDiff, area: Rect) {
             Span::styled(" ", Style::default()),
             Span::styled(tag, Style::default().fg(color).bold()),
             Span::raw("  "),
-            Span::styled(host_label, Style::default().fg(TEXT).bold()),
+            Span::styled(host_label, Style::default().fg(TEXT()).bold()),
         ]));
         for pc in &hc.port_changes {
             let (prefix, pcolor, detail) = match pc.kind {
                 PortChangeKind::NewlyOpen => (
                     "     + ",
-                    OK,
+                    OK(),
                     format!(
                         "{}/{} {} {}",
                         pc.port,
@@ -770,7 +803,7 @@ fn render_full_diff(f: &mut Frame, diff: &ScanDiff, area: Rect) {
                 ),
                 PortChangeKind::NewlyClosed => (
                     "     - ",
-                    DANGER,
+                    DANGER(),
                     format!(
                         "{}/{} {} {}",
                         pc.port,
@@ -781,7 +814,7 @@ fn render_full_diff(f: &mut Frame, diff: &ScanDiff, area: Rect) {
                 ),
                 PortChangeKind::StateChanged => (
                     "     ~ ",
-                    WARN,
+                    WARN(),
                     format!(
                         "{}/{}  {} → {}",
                         pc.port,
@@ -792,7 +825,7 @@ fn render_full_diff(f: &mut Frame, diff: &ScanDiff, area: Rect) {
                 ),
                 PortChangeKind::ServiceChanged => (
                     "     ~ ",
-                    WARN,
+                    WARN(),
                     format!(
                         "{}/{}  service {} → {}",
                         pc.port,
@@ -803,7 +836,7 @@ fn render_full_diff(f: &mut Frame, diff: &ScanDiff, area: Rect) {
                 ),
                 PortChangeKind::VersionChanged => (
                     "     ~ ",
-                    WARN,
+                    WARN(),
                     format!(
                         "{}/{}  version {} → {}",
                         pc.port,
@@ -815,7 +848,7 @@ fn render_full_diff(f: &mut Frame, diff: &ScanDiff, area: Rect) {
             };
             lines.push(Line::from(vec![
                 Span::styled(prefix, Style::default().fg(pcolor).bold()),
-                Span::styled(detail, Style::default().fg(DIM)),
+                Span::styled(detail, Style::default().fg(DIM())),
             ]));
         }
     }
@@ -842,12 +875,12 @@ fn render_history_list(f: &mut Frame, app: &App, area: Rect) {
     };
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(BORDER))
+        .border_style(Style::default().fg(BORDER()))
         .title(title);
 
     if app.history_entries.is_empty() {
         let para = Paragraph::new("No scans in history yet. Run a scan from the Targets tab.")
-            .style(Style::default().fg(DIM))
+            .style(Style::default().fg(DIM()))
             .block(block);
         f.render_widget(para, area);
         return;
@@ -860,13 +893,13 @@ fn render_history_list(f: &mut Frame, app: &App, area: Rect) {
         .map(|s: &ScanSummary| {
             let ago = history::human_ago(now - s.started_at);
             let status_color = match s.status.as_str() {
-                "finished" => OK,
-                "running" => ACCENT,
-                _ => DANGER,
+                "finished" => OK(),
+                "running" => ACCENT(),
+                _ => DANGER(),
             };
             let is_marked = app.history_marked_id.as_deref() == Some(s.id.as_str());
             let marker = if is_marked {
-                Span::styled("★ ", Style::default().fg(WARN).bold())
+                Span::styled("★ ", Style::default().fg(WARN()).bold())
             } else {
                 Span::raw("  ")
             };
@@ -874,11 +907,11 @@ fn render_history_list(f: &mut Frame, app: &App, area: Rect) {
                 marker,
                 Span::styled(
                     s.group_name.clone(),
-                    Style::default().fg(TEXT).bold(),
+                    Style::default().fg(TEXT()).bold(),
                 ),
                 Span::styled(
                     format!(" · {}", s.profile_name),
-                    Style::default().fg(DIM),
+                    Style::default().fg(DIM()),
                 ),
                 Span::raw("  "),
                 Span::styled(
@@ -886,7 +919,7 @@ fn render_history_list(f: &mut Frame, app: &App, area: Rect) {
                     Style::default().fg(status_color),
                 ),
                 Span::raw("  "),
-                Span::styled(ago, Style::default().fg(DIM)),
+                Span::styled(ago, Style::default().fg(DIM())),
             ]))
         })
         .collect();
@@ -895,8 +928,8 @@ fn render_history_list(f: &mut Frame, app: &App, area: Rect) {
         .block(block)
         .highlight_style(
             Style::default()
-                .bg(Color::Rgb(18, 42, 54))
-                .fg(ACCENT)
+                .bg(SELECTION_BG())
+                .fg(ACCENT())
                 .add_modifier(Modifier::BOLD),
         )
         .highlight_symbol("▸ ");
@@ -913,12 +946,12 @@ fn render_history_detail(f: &mut Frame, app: &App, area: Rect) {
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(BORDER))
+        .border_style(Style::default().fg(BORDER()))
         .title(" Scan details ");
 
     let Some(rec) = app.history_selected.as_ref() else {
         let para = Paragraph::new("Select a scan from the list.")
-            .style(Style::default().fg(DIM))
+            .style(Style::default().fg(DIM()))
             .block(block);
         f.render_widget(para, area);
         return;
@@ -927,20 +960,20 @@ fn render_history_detail(f: &mut Frame, app: &App, area: Rect) {
     let mut lines: Vec<Line> = Vec::new();
     lines.push(Line::from(vec![
         Span::styled(" ", Style::default()),
-        Span::styled(rec.id.clone(), Style::default().fg(ACCENT).bold()),
+        Span::styled(rec.id.clone(), Style::default().fg(ACCENT()).bold()),
         Span::raw("  "),
         Span::styled(
             format!("{} / {}", rec.group_name, rec.profile_name),
-            Style::default().fg(TEXT),
+            Style::default().fg(TEXT()),
         ),
     ]));
     lines.push(Line::from(vec![Span::styled(
         format!(" started: {}", history::format_timestamp(rec.started_at)),
-        Style::default().fg(DIM),
+        Style::default().fg(DIM()),
     )]));
     lines.push(Line::from(vec![Span::styled(
         format!(" cmd:     {}", rec.command),
-        Style::default().fg(OK),
+        Style::default().fg(OK()),
     )]));
     lines.push(Line::from(vec![Span::styled(
         format!(
@@ -949,7 +982,7 @@ fn render_history_detail(f: &mut Frame, app: &App, area: Rect) {
             rec.hosts_down,
             rec.hosts.len()
         ),
-        Style::default().fg(DIM),
+        Style::default().fg(DIM()),
     )]));
     lines.push(Line::raw(""));
 
@@ -958,7 +991,7 @@ fn render_history_detail(f: &mut Frame, app: &App, area: Rect) {
         if host.ports.is_empty() {
             lines.push(Line::from(Span::styled(
                 "  (no ports)",
-                Style::default().fg(DIM),
+                Style::default().fg(DIM()),
             )));
             continue;
         }
@@ -971,7 +1004,7 @@ fn render_history_detail(f: &mut Frame, app: &App, area: Rect) {
     lines.push(Line::raw(""));
     lines.push(Line::from(Span::styled(
         " [e] export bundle   [r] reload list",
-        Style::default().fg(DIM),
+        Style::default().fg(DIM()),
     )));
 
     let para = Paragraph::new(lines).block(block).wrap(Wrap { trim: false });
@@ -980,27 +1013,27 @@ fn render_history_detail(f: &mut Frame, app: &App, area: Rect) {
 
 fn render_status(f: &mut Frame, app: &App, area: Rect) {
     let hint = match app.tab {
-        Tab::Targets => " [↑↓/jk] nav   [Enter] run scan   [a]dd   [e]dit   [d]elete   [Tab] next   [?] help ",
-        Tab::Profiles => " [↑↓/jk] navigate   [Enter] run scan   [Tab] next tab   [?] help   [q] quit ",
+        Tab::Targets => " [↑↓/jk] nav   [Enter] run scan   [a]dd   [e]dit   [d]elete   [t] theme   [?] help ",
+        Tab::Profiles => " [↑↓/jk] nav   [Enter] run scan   [a]dd   [e]dit   [d]elete   [t] theme   [?] help ",
         Tab::Scan => " [↑↓/jk] hosts   [x] stop   [Enter] rerun   [Shift+E] export   [4] history ",
         Tab::History => " [↑↓/jk] navigate   [m] mark   [d] diff marked↔current   [e] export   [r] reload   [Esc] clear ",
     };
-    let mut spans: Vec<Span> = vec![Span::styled(hint, Style::default().fg(DIM))];
+    let mut spans: Vec<Span> = vec![Span::styled(hint, Style::default().fg(DIM()))];
 
     if let Some((msg, _)) = &app.toast {
         spans.push(Span::raw("  "));
-        spans.push(Span::styled(msg.clone(), Style::default().fg(OK).bold()));
+        spans.push(Span::styled(msg.clone(), Style::default().fg(OK()).bold()));
     } else if let Some(err) = &app.scan_error {
         spans.push(Span::raw("  "));
         spans.push(Span::styled(
             format!("error: {err}"),
-            Style::default().fg(DANGER),
+            Style::default().fg(DANGER()),
         ));
     } else if matches!(app.scan_state, ScanState::Finished) && !app.scan_summary.is_empty() {
         spans.push(Span::raw("  "));
         spans.push(Span::styled(
             app.scan_summary.clone(),
-            Style::default().fg(OK),
+            Style::default().fg(OK()),
         ));
     }
     let para = Paragraph::new(Line::from(spans));
@@ -1009,8 +1042,8 @@ fn render_status(f: &mut Frame, app: &App, area: Rect) {
 
 fn render_target_form_overlay(f: &mut Frame, app: &App, area: Rect) {
     let (title, mode_label) = match app.form_mode {
-        FormMode::Add => (" Add target group ", "Add"),
-        FormMode::Edit(_) => (" Edit target group ", "Edit"),
+        FormMode::AddTarget => (" Add target group ", "Add"),
+        FormMode::EditTarget(_) => (" Edit target group ", "Edit"),
         _ => (" Target group ", ""),
     };
     let _ = mode_label;
@@ -1049,9 +1082,9 @@ fn render_target_form_overlay(f: &mut Frame, app: &App, area: Rect) {
                 "Targets    ·".to_string()
             },
             Style::default().fg(if app.form.field == FormField::Targets {
-                ACCENT
+                ACCENT()
             } else {
-                DIM
+                DIM()
             }),
         ),
     ]));
@@ -1060,12 +1093,12 @@ fn render_target_form_overlay(f: &mut Frame, app: &App, area: Rect) {
     for (i, t) in app.form.targets.iter().enumerate() {
         let is_current = targets_focused && i == last_idx;
         let cursor = if is_current { "█" } else { "" };
-        let bullet_color = if t.trim().is_empty() { DIM } else { OK };
+        let bullet_color = if t.trim().is_empty() { DIM() } else { OK() };
         lines.push(Line::from(vec![
             Span::styled("              ", Style::default()),
             Span::styled("• ", Style::default().fg(bullet_color)),
-            Span::styled(t.clone(), Style::default().fg(TEXT)),
-            Span::styled(cursor, Style::default().fg(ACCENT).bold()),
+            Span::styled(t.clone(), Style::default().fg(TEXT())),
+            Span::styled(cursor, Style::default().fg(ACCENT()).bold()),
         ]));
     }
     lines.push(Line::raw(""));
@@ -1073,49 +1106,135 @@ fn render_target_form_overlay(f: &mut Frame, app: &App, area: Rect) {
     if let Some(err) = &app.form.error {
         lines.push(Line::from(vec![Span::styled(
             format!("  error: {err}"),
-            Style::default().fg(DANGER),
+            Style::default().fg(DANGER()),
         )]));
         lines.push(Line::raw(""));
     }
 
     lines.push(Line::from(vec![Span::styled(
         "  [Tab/Shift+Tab] switch fields   [Enter] next / new target line",
-        Style::default().fg(DIM),
+        Style::default().fg(DIM()),
     )]));
     lines.push(Line::from(vec![Span::styled(
         "  [Ctrl+S] save                   [Esc] cancel",
-        Style::default().fg(DIM),
+        Style::default().fg(DIM()),
     )]));
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(ACCENT))
-        .title(Span::styled(title, Style::default().fg(ACCENT).bold()));
+        .border_style(Style::default().fg(ACCENT()))
+        .title(Span::styled(title, Style::default().fg(ACCENT()).bold()));
     let para = Paragraph::new(lines).block(block).wrap(Wrap { trim: false });
     f.render_widget(para, rect);
 }
 
 fn form_field_line(label: &str, value: &str, focused: bool, _last: bool) -> Line<'static> {
     let marker = if focused { "▸" } else { "·" };
-    let label_color = if focused { ACCENT } else { DIM };
+    let label_color = if focused { ACCENT() } else { DIM() };
     let cursor = if focused { "█" } else { "" };
     Line::from(vec![
         Span::styled("  ", Style::default()),
         Span::styled(format!("{label} {marker} "), Style::default().fg(label_color)),
-        Span::styled(value.to_string(), Style::default().fg(TEXT)),
-        Span::styled(cursor, Style::default().fg(ACCENT).bold()),
+        Span::styled(value.to_string(), Style::default().fg(TEXT())),
+        Span::styled(cursor, Style::default().fg(ACCENT()).bold()),
     ])
 }
 
-fn render_delete_confirm_overlay(f: &mut Frame, app: &App, area: Rect) {
-    let FormMode::DeleteConfirm(idx) = &app.form_mode else {
-        return;
+fn render_profile_form_overlay(f: &mut Frame, app: &App, area: Rect) {
+    let title = match app.form_mode {
+        FormMode::AddProfile => " Add scan profile ",
+        FormMode::EditProfile(_) => " Edit scan profile ",
+        _ => " Scan profile ",
     };
-    let name = app
-        .targets
-        .get(*idx)
-        .map(|g| g.name.clone())
-        .unwrap_or_default();
+
+    let body_lines: u16 = 1 + 1 + 1 + 1 + 3;
+    let error_bonus: u16 = if app.profile_form.error.is_some() { 2 } else { 0 };
+    let h = (body_lines + error_bonus + 4)
+        .min(area.height.saturating_sub(4))
+        .max(12);
+    let w = 78.min(area.width.saturating_sub(4));
+    let x = area.x + (area.width.saturating_sub(w)) / 2;
+    let y = area.y + (area.height.saturating_sub(h)) / 2;
+    let rect = Rect { x, y, width: w, height: h };
+
+    f.render_widget(Clear, rect);
+
+    let f_ = &app.profile_form;
+    let mut lines: Vec<Line> = Vec::new();
+    lines.push(Line::raw(""));
+    lines.push(profile_field_line(
+        "Name       ",
+        &f_.name,
+        f_.field == ProfileFormField::Name,
+    ));
+    lines.push(profile_field_line(
+        "Description",
+        &f_.description,
+        f_.field == ProfileFormField::Description,
+    ));
+    lines.push(profile_field_line(
+        "Flags      ",
+        &f_.flags,
+        f_.field == ProfileFormField::Flags,
+    ));
+    lines.push(Line::raw(""));
+    lines.push(Line::from(vec![Span::styled(
+        "  example flags: -T4 --top-ports 100 -sV -sC",
+        Style::default().fg(DIM()),
+    )]));
+
+    if let Some(err) = &f_.error {
+        lines.push(Line::raw(""));
+        lines.push(Line::from(vec![Span::styled(
+            format!("  error: {err}"),
+            Style::default().fg(DANGER()),
+        )]));
+    }
+
+    lines.push(Line::raw(""));
+    lines.push(Line::from(vec![Span::styled(
+        "  [Tab/Shift+Tab] switch fields   [Ctrl+S] save   [Esc] cancel",
+        Style::default().fg(DIM()),
+    )]));
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(ACCENT()))
+        .title(Span::styled(title, Style::default().fg(ACCENT()).bold()));
+    let para = Paragraph::new(lines).block(block).wrap(Wrap { trim: false });
+    f.render_widget(para, rect);
+}
+
+fn profile_field_line(label: &str, value: &str, focused: bool) -> Line<'static> {
+    let marker = if focused { "▸" } else { "·" };
+    let label_color = if focused { ACCENT() } else { DIM() };
+    let cursor = if focused { "█" } else { "" };
+    Line::from(vec![
+        Span::styled("  ", Style::default()),
+        Span::styled(format!("{label} {marker} "), Style::default().fg(label_color)),
+        Span::styled(value.to_string(), Style::default().fg(TEXT())),
+        Span::styled(cursor, Style::default().fg(ACCENT()).bold()),
+    ])
+}
+
+fn render_delete_confirm_overlay(f: &mut Frame, app: &App, area: Rect, is_profile: bool) {
+    let (name, kind) = match (&app.form_mode, is_profile) {
+        (FormMode::DeleteTargetConfirm(idx), false) => (
+            app.targets
+                .get(*idx)
+                .map(|g| g.name.clone())
+                .unwrap_or_default(),
+            "target group",
+        ),
+        (FormMode::DeleteProfileConfirm(idx), true) => (
+            app.profiles
+                .get(*idx)
+                .map(|p| p.name.clone())
+                .unwrap_or_default(),
+            "profile",
+        ),
+        _ => return,
+    };
 
     let w = 56.min(area.width.saturating_sub(4));
     let h = 9u16.min(area.height.saturating_sub(4));
@@ -1127,26 +1246,26 @@ fn render_delete_confirm_overlay(f: &mut Frame, app: &App, area: Rect) {
     let lines = vec![
         Line::raw(""),
         Line::from(vec![Span::styled(
-            "  Delete target group?",
-            Style::default().fg(DANGER).bold(),
+            format!("  Delete {kind}?"),
+            Style::default().fg(DANGER()).bold(),
         )]),
         Line::raw(""),
         Line::from(vec![
             Span::styled("    ", Style::default()),
-            Span::styled(name, Style::default().fg(TEXT).bold()),
+            Span::styled(name, Style::default().fg(TEXT()).bold()),
         ]),
         Line::raw(""),
         Line::from(vec![Span::styled(
             "  [y] yes, delete       [any other key] cancel",
-            Style::default().fg(DIM),
+            Style::default().fg(DIM()),
         )]),
     ];
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(DANGER))
+        .border_style(Style::default().fg(DANGER()))
         .title(Span::styled(
             " Confirm delete ",
-            Style::default().fg(DANGER).bold(),
+            Style::default().fg(DANGER()).bold(),
         ));
     let para = Paragraph::new(lines).block(block);
     f.render_widget(para, rect);
@@ -1169,14 +1288,15 @@ fn render_help_overlay(f: &mut Frame, area: Rect) {
     let lines = vec![
         Line::from(Span::styled(
             " netscan — keybindings ",
-            Style::default().fg(ACCENT).bold(),
+            Style::default().fg(ACCENT()).bold(),
         )),
         Line::raw(""),
         Line::from(" [1/2/3/4] switch tabs (Targets / Profiles / Scan / History)"),
         Line::from(" [Tab]     next tab"),
         Line::from(" [↑↓/jk]   navigate lists"),
         Line::from(" [Enter]   run scan with selected target + profile"),
-        Line::from(" [a/e/d]   add / edit / delete target group (Targets tab)"),
+        Line::from(" [a/e/d]   add / edit / delete (Targets & Profiles tabs)"),
+        Line::from(" [t]       cycle theme (dark / solarized / dracula / nord / gruvbox)"),
         Line::from(" [Ctrl+S]  save form   [Esc]  cancel form"),
         Line::from(" [x]       stop a running scan"),
         Line::from(" [Shift+E] export incident bundle (Scan tab)"),
@@ -1190,30 +1310,30 @@ fn render_help_overlay(f: &mut Frame, area: Rect) {
         Line::raw(""),
         Line::from(Span::styled(
             " Config files (edit in your editor):",
-            Style::default().fg(TEXT).bold(),
+            Style::default().fg(TEXT()).bold(),
         )),
         Line::from(Span::styled(
             "  ~/.config/netscan/targets.toml",
-            Style::default().fg(DIM),
+            Style::default().fg(DIM()),
         )),
         Line::from(Span::styled(
             "  ~/.config/netscan/profiles.toml",
-            Style::default().fg(DIM),
+            Style::default().fg(DIM()),
         )),
         Line::from(Span::styled(
             "  ~/.config/netscan/config.toml  (AI triage)",
-            Style::default().fg(DIM),
+            Style::default().fg(DIM()),
         )),
         Line::raw(""),
         Line::from(Span::styled(
             " press Esc, ?, or q to close ",
-            Style::default().fg(DIM),
+            Style::default().fg(DIM()),
         )),
     ];
     let para = Paragraph::new(lines).block(
         Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(ACCENT))
+            .border_style(Style::default().fg(ACCENT()))
             .title(" Help "),
     );
     f.render_widget(para, rect);

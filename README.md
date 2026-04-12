@@ -12,11 +12,11 @@ netscan wraps the `nmap` engine with a real workflow: target inventory, saved sc
 live streaming results as each host comes in, and (soon) scan history with differential
 scanning. One binary. No config required on first run.
 
-**Status:** v0.3. Target inventory, scan profiles, live streaming scan view,
-SQLite-backed scan history, automatic differential scanning, incident bundle
-export, **manual diff between any two historical scans**, and **opt-in AI
-triage via local or remote Ollama** are all working. NSE script picker and
-scheduled/daemon mode are next.
+**Status:** v0.5. Target inventory, **target and profile CRUD via TUI forms**,
+live streaming scan view, SQLite-backed scan history, automatic differential
+scanning, incident bundle export, manual diff between any two historical
+scans, opt-in AI triage via local or remote Ollama, and **5 built-in themes**
+are all working. NSE script picker and scheduled/daemon mode are next.
 
 ---
 
@@ -77,9 +77,24 @@ netscan --config-paths   # show where config and data live
 | `d` | Diff marked ↔ current (History tab) |
 | `e` | Export selected history entry |
 | `r` | Reload history list |
-| `Esc` | Close diff view / clear mark |
+| `Esc` | Close diff view / clear mark / cancel form |
+| `a` / `e` / `d` | Add / edit / delete (Targets & Profiles tabs) |
+| `Ctrl+S` | Save form |
+| `t` | Cycle theme (dark → solarized → dracula → nord → gruvbox) |
 | `?` | Help overlay |
 | `q` | Quit (or stop a running scan) |
+
+## Themes
+
+Five built-in themes, cycle with `t`:
+
+- **dark** — the default; netwatch-family teal on deep navy
+- **solarized** — Ethan Schoonover's solarized dark palette
+- **dracula** — the classic Dracula palette
+- **nord** — the Nord palette (arctic / frost)
+- **gruvbox** — Gruvbox dark (retro groove)
+
+Your choice persists in `~/.config/netscan/config.toml` under `[ui] theme = "…"`.
 
 ## Scan history & differential scanning
 
@@ -205,6 +220,9 @@ never need to include those yourself.
 - [x] Incident bundle export (`Shift+E`)
 - [x] Manual diff between any two historical scans
 - [x] Opt-in AI triage via local or remote Ollama
+- [x] Target group CRUD via TUI form
+- [x] Scan profile CRUD via TUI form
+- [x] Theme system (5 built-in themes, persisted)
 - [ ] NSE script picker
 - [ ] Scheduled / daemon mode for background scans
 - [ ] Webhook alerts on change

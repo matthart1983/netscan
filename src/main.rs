@@ -4,6 +4,7 @@ mod config;
 mod diff;
 mod history;
 mod nmap;
+mod theme;
 mod types;
 mod ui;
 
