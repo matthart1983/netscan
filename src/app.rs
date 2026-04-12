@@ -46,6 +46,104 @@ pub enum AiState {
     Failed(String),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FormMode {
+    None,
+    Add,
+    Edit(usize),
+    DeleteConfirm(usize),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FormField {
+    Name,
+    Description,
+    Targets,
+}
+
+impl FormField {
+    pub fn next(self) -> Self {
+        match self {
+            Self::Name => Self::Description,
+            Self::Description => Self::Targets,
+            Self::Targets => Self::Name,
+        }
+    }
+    pub fn prev(self) -> Self {
+        match self {
+            Self::Name => Self::Targets,
+            Self::Description => Self::Name,
+            Self::Targets => Self::Description,
+        }
+    }
+    #[allow(dead_code)]
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Name => "Name",
+            Self::Description => "Description",
+            Self::Targets => "Targets",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct TargetForm {
+    pub field: FormField,
+    pub name: String,
+    pub description: String,
+    /// Each entry is one target line. The last entry is the one being typed.
+    pub targets: Vec<String>,
+    pub error: Option<String>,
+}
+
+impl TargetForm {
+    pub fn empty() -> Self {
+        Self {
+            field: FormField::Name,
+            name: String::new(),
+            description: String::new(),
+            targets: vec![String::new()],
+            error: None,
+        }
+    }
+
+    pub fn from_group(g: &TargetGroup) -> Self {
+        let mut targets = g.targets.clone();
+        if targets.is_empty() {
+            targets.push(String::new());
+        }
+        Self {
+            field: FormField::Name,
+            name: g.name.clone(),
+            description: g.description.clone(),
+            targets,
+            error: None,
+        }
+    }
+
+    /// Produce the final validated TargetGroup, or an error string.
+    pub fn to_group(&self) -> Result<TargetGroup, String> {
+        let name = self.name.trim().to_string();
+        if name.is_empty() {
+            return Err("name is required".to_string());
+        }
+        let cleaned: Vec<String> = self
+            .targets
+            .iter()
+            .map(|t| t.trim().to_string())
+            .filter(|t| !t.is_empty())
+            .collect();
+        if cleaned.is_empty() {
+            return Err("add at least one target (IP, hostname, or CIDR)".to_string());
+        }
+        Ok(TargetGroup {
+            name,
+            description: self.description.trim().to_string(),
+            targets: cleaned,
+        })
+    }
+}
+
 pub struct App {
     pub tab: Tab,
     pub targets: Vec<TargetGroup>,
@@ -81,6 +179,10 @@ pub struct App {
     // AI triage
     pub ai_state: AiState,
     ai_rx: Option<Receiver<AiResult>>,
+
+    // Target CRUD form
+    pub form_mode: FormMode,
+    pub form: TargetForm,
 
     store: Store,
     paths: Paths,
@@ -129,6 +231,8 @@ impl App {
             history_diff_view: None,
             ai_state: AiState::Off,
             ai_rx: None,
+            form_mode: FormMode::None,
+            form: TargetForm::empty(),
             store,
             paths,
             config,
@@ -366,6 +470,16 @@ impl App {
             return;
         }
 
+        // Form overlays intercept everything except Ctrl+C.
+        if !matches!(self.form_mode, FormMode::None) {
+            if let (KeyCode::Char('c'), KeyModifiers::CONTROL) = (key.code, key.modifiers) {
+                self.should_quit = true;
+                return;
+            }
+            self.on_key_form(key);
+            return;
+        }
+
         // Global keys
         match (key.code, key.modifiers) {
             (KeyCode::Char('q'), _) => {
@@ -565,8 +679,194 @@ impl App {
             KeyCode::Enter => {
                 self.start_scan();
             }
+            KeyCode::Char('a') => {
+                self.open_add_form();
+            }
+            KeyCode::Char('e') => {
+                self.open_edit_form();
+            }
+            KeyCode::Char('d') => {
+                self.open_delete_confirm();
+            }
             _ => {}
         }
+    }
+
+    fn open_add_form(&mut self) {
+        self.form = TargetForm::empty();
+        self.form_mode = FormMode::Add;
+    }
+
+    fn open_edit_form(&mut self) {
+        let Some(g) = self.targets.get(self.target_index) else {
+            return;
+        };
+        self.form = TargetForm::from_group(g);
+        self.form_mode = FormMode::Edit(self.target_index);
+    }
+
+    fn open_delete_confirm(&mut self) {
+        if self.targets.get(self.target_index).is_none() {
+            return;
+        }
+        self.form_mode = FormMode::DeleteConfirm(self.target_index);
+    }
+
+    fn on_key_form(&mut self, key: KeyEvent) {
+        // Delete confirmation: y/Y confirms, anything else cancels.
+        if let FormMode::DeleteConfirm(idx) = self.form_mode {
+            match key.code {
+                KeyCode::Char('y') | KeyCode::Char('Y') => {
+                    self.delete_group(idx);
+                }
+                _ => {
+                    self.form_mode = FormMode::None;
+                }
+            }
+            return;
+        }
+
+        // Add / Edit form.
+        match (key.code, key.modifiers) {
+            (KeyCode::Esc, _) => {
+                self.form_mode = FormMode::None;
+                self.form.error = None;
+            }
+            (KeyCode::Char('s'), KeyModifiers::CONTROL) => {
+                self.submit_form();
+            }
+            (KeyCode::Tab, _) => {
+                self.form.field = self.form.field.next();
+            }
+            (KeyCode::BackTab, _) => {
+                self.form.field = self.form.field.prev();
+            }
+            (KeyCode::Enter, _) => match self.form.field {
+                FormField::Name => self.form.field = FormField::Description,
+                FormField::Description => self.form.field = FormField::Targets,
+                FormField::Targets => {
+                    // Start a new target line.
+                    self.form.targets.push(String::new());
+                }
+            },
+            (KeyCode::Backspace, _) => self.form_backspace(),
+            (KeyCode::Char(c), m) if !m.contains(KeyModifiers::CONTROL) => {
+                self.form_insert_char(c);
+            }
+            _ => {}
+        }
+    }
+
+    fn form_insert_char(&mut self, c: char) {
+        match self.form.field {
+            FormField::Name => self.form.name.push(c),
+            FormField::Description => self.form.description.push(c),
+            FormField::Targets => {
+                if self.form.targets.is_empty() {
+                    self.form.targets.push(String::new());
+                }
+                let idx = self.form.targets.len() - 1;
+                self.form.targets[idx].push(c);
+            }
+        }
+    }
+
+    fn form_backspace(&mut self) {
+        match self.form.field {
+            FormField::Name => {
+                self.form.name.pop();
+            }
+            FormField::Description => {
+                self.form.description.pop();
+            }
+            FormField::Targets => {
+                if self.form.targets.is_empty() {
+                    self.form.targets.push(String::new());
+                    return;
+                }
+                let idx = self.form.targets.len() - 1;
+                if self.form.targets[idx].is_empty() {
+                    if self.form.targets.len() > 1 {
+                        self.form.targets.pop();
+                    }
+                } else {
+                    self.form.targets[idx].pop();
+                }
+            }
+        }
+    }
+
+    fn submit_form(&mut self) {
+        let group = match self.form.to_group() {
+            Ok(g) => g,
+            Err(e) => {
+                self.form.error = Some(e);
+                return;
+            }
+        };
+
+        // Uniqueness check — name must not collide with another group.
+        let edit_idx = if let FormMode::Edit(i) = self.form_mode {
+            Some(i)
+        } else {
+            None
+        };
+        if self.targets.iter().enumerate().any(|(i, g)| {
+            g.name == group.name && Some(i) != edit_idx
+        }) {
+            self.form.error =
+                Some(format!("a group named \"{}\" already exists", group.name));
+            return;
+        }
+
+        match self.form_mode {
+            FormMode::Add => {
+                self.targets.push(group);
+                self.target_index = self.targets.len() - 1;
+            }
+            FormMode::Edit(i) => {
+                if let Some(slot) = self.targets.get_mut(i) {
+                    *slot = group;
+                }
+            }
+            _ => {}
+        }
+
+        if let Err(e) = crate::config::save_targets(&self.paths.targets_file, &self.targets) {
+            self.form.error = Some(format!("save failed: {e}"));
+            return;
+        }
+
+        let msg = match self.form_mode {
+            FormMode::Add => "target group added",
+            FormMode::Edit(_) => "target group updated",
+            _ => "saved",
+        };
+        self.toast = Some((msg.to_string(), Instant::now()));
+        self.form_mode = FormMode::None;
+        self.form.error = None;
+    }
+
+    fn delete_group(&mut self, idx: usize) {
+        if idx >= self.targets.len() {
+            self.form_mode = FormMode::None;
+            return;
+        }
+        let removed = self.targets.remove(idx);
+        if self.target_index >= self.targets.len() && !self.targets.is_empty() {
+            self.target_index = self.targets.len() - 1;
+        } else if self.targets.is_empty() {
+            self.target_index = 0;
+        }
+        if let Err(e) = crate::config::save_targets(&self.paths.targets_file, &self.targets) {
+            self.scan_error = Some(format!("save failed: {e}"));
+        } else {
+            self.toast = Some((
+                format!("deleted \"{}\"", removed.name),
+                Instant::now(),
+            ));
+        }
+        self.form_mode = FormMode::None;
     }
 
     fn on_key_profiles(&mut self, key: KeyEvent) {
@@ -886,5 +1186,82 @@ fn opt_json(s: Option<&str>) -> String {
     match s {
         Some(v) => format!("\"{}\"", json_escape(v)),
         None => "null".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_form_requires_name() {
+        let f = TargetForm::empty();
+        assert!(f.to_group().is_err());
+    }
+
+    #[test]
+    fn form_requires_at_least_one_target() {
+        let mut f = TargetForm::empty();
+        f.name = "test".to_string();
+        assert!(f.to_group().is_err());
+        f.targets = vec!["  ".to_string(), "".to_string()];
+        assert!(f.to_group().is_err());
+    }
+
+    #[test]
+    fn form_trims_and_filters_targets() {
+        let mut f = TargetForm::empty();
+        f.name = "  home-lan  ".to_string();
+        f.description = "  desc  ".to_string();
+        f.targets = vec![
+            "  192.168.1.0/24  ".to_string(),
+            "".to_string(),
+            " 10.0.0.5 ".to_string(),
+            "   ".to_string(),
+        ];
+        let g = f.to_group().unwrap();
+        assert_eq!(g.name, "home-lan");
+        assert_eq!(g.description, "desc");
+        assert_eq!(g.targets, vec!["192.168.1.0/24", "10.0.0.5"]);
+    }
+
+    #[test]
+    fn form_from_group_roundtrips() {
+        let g = TargetGroup {
+            name: "prod".to_string(),
+            description: "edge".to_string(),
+            targets: vec!["a.example.com".to_string(), "b.example.com".to_string()],
+        };
+        let f = TargetForm::from_group(&g);
+        let g2 = f.to_group().unwrap();
+        assert_eq!(g2.name, g.name);
+        assert_eq!(g2.description, g.description);
+        assert_eq!(g2.targets, g.targets);
+    }
+
+    #[test]
+    fn save_and_load_targets_roundtrip() {
+        let tmp = std::env::temp_dir().join(format!(
+            "netscan-targets-{}.toml",
+            crate::history::short_id()
+        ));
+        let groups = vec![
+            TargetGroup {
+                name: "lan".to_string(),
+                description: "local".to_string(),
+                targets: vec!["192.168.0.0/16".to_string()],
+            },
+            TargetGroup {
+                name: "vps".to_string(),
+                description: "cloud".to_string(),
+                targets: vec!["a.example.com".to_string(), "b.example.com".to_string()],
+            },
+        ];
+        crate::config::save_targets(&tmp, &groups).unwrap();
+        let loaded = crate::config::load_targets(&tmp).unwrap();
+        assert_eq!(loaded.len(), 2);
+        assert_eq!(loaded[0].name, "lan");
+        assert_eq!(loaded[1].targets.len(), 2);
+        std::fs::remove_file(&tmp).ok();
     }
 }

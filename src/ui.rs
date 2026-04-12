@@ -1,4 +1,4 @@
-use crate::app::{AiState, App, ScanState, Tab};
+use crate::app::{AiState, App, FormField, FormMode, ScanState, Tab};
 use crate::diff::{HostChangeKind, PortChangeKind, ScanDiff};
 use crate::history::{self, ScanSummary};
 use crate::types::{Host, HostStatus, Port, PortState};
@@ -37,6 +37,12 @@ pub fn render(f: &mut Frame, app: &App) {
         Tab::History => render_history(f, app, chunks[1]),
     }
     render_status(f, app, chunks[2]);
+
+    match &app.form_mode {
+        FormMode::None => {}
+        FormMode::Add | FormMode::Edit(_) => render_target_form_overlay(f, app, area),
+        FormMode::DeleteConfirm(_) => render_delete_confirm_overlay(f, app, area),
+    }
 
     if app.show_help {
         render_help_overlay(f, area);
@@ -974,7 +980,7 @@ fn render_history_detail(f: &mut Frame, app: &App, area: Rect) {
 
 fn render_status(f: &mut Frame, app: &App, area: Rect) {
     let hint = match app.tab {
-        Tab::Targets => " [↑↓/jk] navigate   [Enter] run scan   [Tab] next tab   [?] help   [q] quit ",
+        Tab::Targets => " [↑↓/jk] nav   [Enter] run scan   [a]dd   [e]dit   [d]elete   [Tab] next   [?] help ",
         Tab::Profiles => " [↑↓/jk] navigate   [Enter] run scan   [Tab] next tab   [?] help   [q] quit ",
         Tab::Scan => " [↑↓/jk] hosts   [x] stop   [Enter] rerun   [Shift+E] export   [4] history ",
         Tab::History => " [↑↓/jk] navigate   [m] mark   [d] diff marked↔current   [e] export   [r] reload   [Esc] clear ",
@@ -1001,6 +1007,151 @@ fn render_status(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(para, area);
 }
 
+fn render_target_form_overlay(f: &mut Frame, app: &App, area: Rect) {
+    let (title, mode_label) = match app.form_mode {
+        FormMode::Add => (" Add target group ", "Add"),
+        FormMode::Edit(_) => (" Edit target group ", "Edit"),
+        _ => (" Target group ", ""),
+    };
+    let _ = mode_label;
+
+    let target_lines = app.form.targets.len().max(1) as u16;
+    let body_lines: u16 = 1 /*name*/ + 1 /*desc*/ + 1 /*targets label*/ + target_lines + 1 /*blank*/ + 2 /*hints*/;
+    let error_bonus: u16 = if app.form.error.is_some() { 2 } else { 0 };
+    let h = (body_lines + error_bonus + 4).min(area.height.saturating_sub(4)).max(12);
+    let w = 68.min(area.width.saturating_sub(4));
+    let x = area.x + (area.width.saturating_sub(w)) / 2;
+    let y = area.y + (area.height.saturating_sub(h)) / 2;
+    let rect = Rect { x, y, width: w, height: h };
+
+    f.render_widget(Clear, rect);
+
+    let mut lines: Vec<Line> = Vec::new();
+    lines.push(Line::raw(""));
+    lines.push(form_field_line(
+        "Name       ",
+        &app.form.name,
+        app.form.field == FormField::Name,
+        false,
+    ));
+    lines.push(form_field_line(
+        "Description",
+        &app.form.description,
+        app.form.field == FormField::Description,
+        false,
+    ));
+    lines.push(Line::from(vec![
+        Span::styled("  ", Style::default()),
+        Span::styled(
+            if app.form.field == FormField::Targets {
+                "Targets    ▸".to_string()
+            } else {
+                "Targets    ·".to_string()
+            },
+            Style::default().fg(if app.form.field == FormField::Targets {
+                ACCENT
+            } else {
+                DIM
+            }),
+        ),
+    ]));
+    let targets_focused = app.form.field == FormField::Targets;
+    let last_idx = app.form.targets.len().saturating_sub(1);
+    for (i, t) in app.form.targets.iter().enumerate() {
+        let is_current = targets_focused && i == last_idx;
+        let cursor = if is_current { "█" } else { "" };
+        let bullet_color = if t.trim().is_empty() { DIM } else { OK };
+        lines.push(Line::from(vec![
+            Span::styled("              ", Style::default()),
+            Span::styled("• ", Style::default().fg(bullet_color)),
+            Span::styled(t.clone(), Style::default().fg(TEXT)),
+            Span::styled(cursor, Style::default().fg(ACCENT).bold()),
+        ]));
+    }
+    lines.push(Line::raw(""));
+
+    if let Some(err) = &app.form.error {
+        lines.push(Line::from(vec![Span::styled(
+            format!("  error: {err}"),
+            Style::default().fg(DANGER),
+        )]));
+        lines.push(Line::raw(""));
+    }
+
+    lines.push(Line::from(vec![Span::styled(
+        "  [Tab/Shift+Tab] switch fields   [Enter] next / new target line",
+        Style::default().fg(DIM),
+    )]));
+    lines.push(Line::from(vec![Span::styled(
+        "  [Ctrl+S] save                   [Esc] cancel",
+        Style::default().fg(DIM),
+    )]));
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(ACCENT))
+        .title(Span::styled(title, Style::default().fg(ACCENT).bold()));
+    let para = Paragraph::new(lines).block(block).wrap(Wrap { trim: false });
+    f.render_widget(para, rect);
+}
+
+fn form_field_line(label: &str, value: &str, focused: bool, _last: bool) -> Line<'static> {
+    let marker = if focused { "▸" } else { "·" };
+    let label_color = if focused { ACCENT } else { DIM };
+    let cursor = if focused { "█" } else { "" };
+    Line::from(vec![
+        Span::styled("  ", Style::default()),
+        Span::styled(format!("{label} {marker} "), Style::default().fg(label_color)),
+        Span::styled(value.to_string(), Style::default().fg(TEXT)),
+        Span::styled(cursor, Style::default().fg(ACCENT).bold()),
+    ])
+}
+
+fn render_delete_confirm_overlay(f: &mut Frame, app: &App, area: Rect) {
+    let FormMode::DeleteConfirm(idx) = &app.form_mode else {
+        return;
+    };
+    let name = app
+        .targets
+        .get(*idx)
+        .map(|g| g.name.clone())
+        .unwrap_or_default();
+
+    let w = 56.min(area.width.saturating_sub(4));
+    let h = 9u16.min(area.height.saturating_sub(4));
+    let x = area.x + (area.width.saturating_sub(w)) / 2;
+    let y = area.y + (area.height.saturating_sub(h)) / 2;
+    let rect = Rect { x, y, width: w, height: h };
+    f.render_widget(Clear, rect);
+
+    let lines = vec![
+        Line::raw(""),
+        Line::from(vec![Span::styled(
+            "  Delete target group?",
+            Style::default().fg(DANGER).bold(),
+        )]),
+        Line::raw(""),
+        Line::from(vec![
+            Span::styled("    ", Style::default()),
+            Span::styled(name, Style::default().fg(TEXT).bold()),
+        ]),
+        Line::raw(""),
+        Line::from(vec![Span::styled(
+            "  [y] yes, delete       [any other key] cancel",
+            Style::default().fg(DIM),
+        )]),
+    ];
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(DANGER))
+        .title(Span::styled(
+            " Confirm delete ",
+            Style::default().fg(DANGER).bold(),
+        ));
+    let para = Paragraph::new(lines).block(block);
+    f.render_widget(para, rect);
+}
+
 fn render_help_overlay(f: &mut Frame, area: Rect) {
     let w = 62.min(area.width.saturating_sub(4));
     let h = 18.min(area.height.saturating_sub(4));
@@ -1025,6 +1176,8 @@ fn render_help_overlay(f: &mut Frame, area: Rect) {
         Line::from(" [Tab]     next tab"),
         Line::from(" [↑↓/jk]   navigate lists"),
         Line::from(" [Enter]   run scan with selected target + profile"),
+        Line::from(" [a/e/d]   add / edit / delete target group (Targets tab)"),
+        Line::from(" [Ctrl+S]  save form   [Esc]  cancel form"),
         Line::from(" [x]       stop a running scan"),
         Line::from(" [Shift+E] export incident bundle (Scan tab)"),
         Line::from(" [m]       mark scan for diff  (History tab)"),

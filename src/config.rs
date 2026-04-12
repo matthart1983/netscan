@@ -158,6 +158,23 @@ pub fn load_targets(path: &std::path::Path) -> Result<Vec<TargetGroup>> {
     Ok(file.groups)
 }
 
+pub fn save_targets(path: &std::path::Path, groups: &[TargetGroup]) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).ok();
+    }
+    let file = TargetsFile {
+        groups: groups.to_vec(),
+    };
+    let text = toml::to_string_pretty(&file)
+        .context("serializing targets.toml")?;
+    // Write atomically via a temp file in the same directory, then rename.
+    let tmp = path.with_extension("toml.tmp");
+    fs::write(&tmp, text).with_context(|| format!("writing {}", tmp.display()))?;
+    fs::rename(&tmp, path)
+        .with_context(|| format!("renaming {} → {}", tmp.display(), path.display()))?;
+    Ok(())
+}
+
 pub fn load_profiles(path: &std::path::Path) -> Result<Vec<Profile>> {
     if !path.exists() {
         let defaults = default_profiles();
