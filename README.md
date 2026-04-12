@@ -12,12 +12,12 @@ netscan wraps the `nmap` engine with a real workflow: target inventory, saved sc
 live streaming results as each host comes in, and (soon) scan history with differential
 scanning. One binary. No config required on first run.
 
-**Status:** v0.6. Target and profile CRUD via TUI forms, live streaming scan
-view with **real-time progress bar + ETA** and **pause/resume**, SQLite-backed
-scan history, automatic differential scanning, incident bundle export, manual
-diff between any two historical scans, opt-in AI triage via local or remote
-Ollama, and 5 built-in themes are all working. NSE script picker and
-scheduled/daemon mode are next.
+**Status:** v0.1.0 — first public release. Target and profile CRUD via TUI
+forms, live streaming scan view with real-time progress bar + ETA and
+pause/resume, SQLite-backed scan history, automatic differential scanning,
+incident bundle export, manual diff between any two historical scans, opt-in
+AI triage via local or remote Ollama, and 5 built-in themes are all working.
+NSE script picker and scheduled/daemon mode are next.
 
 ---
 
