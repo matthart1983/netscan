@@ -29,6 +29,9 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 ureq = { version = "2", features = ["json"] }
 serde_json = "1"
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [profile.release]
 lto = "thin"
 codegen-units = 1

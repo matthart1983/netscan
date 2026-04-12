@@ -319,8 +319,14 @@ fn render_scan(f: &mut Frame, app: &App, area: Rect) {
     let has_ai = !matches!(app.ai_state, AiState::Off);
 
     // Build vertical layout based on which panes are active.
+    let summary_height =
+        if matches!(app.scan_state, ScanState::Running | ScanState::Paused) {
+            5 // adds a progress bar row
+        } else {
+            4
+        };
     let mut constraints: Vec<Constraint> = Vec::new();
-    constraints.push(Constraint::Length(4)); // summary
+    constraints.push(Constraint::Length(summary_height)); // summary
     constraints.push(Constraint::Min(0)); // host list + detail
     if has_diff {
         constraints.push(Constraint::Length(10));
@@ -510,6 +516,10 @@ fn render_scan_summary(f: &mut Frame, app: &App, area: Rect) {
             " running ",
             Style::default().fg(ACCENT()).add_modifier(Modifier::BOLD),
         ),
+        ScanState::Paused => Span::styled(
+            " paused ",
+            Style::default().fg(WARN()).add_modifier(Modifier::BOLD),
+        ),
         ScanState::Finished => Span::styled(
             " finished ",
             Style::default().fg(OK()).add_modifier(Modifier::BOLD),
@@ -520,9 +530,13 @@ fn render_scan_summary(f: &mut Frame, app: &App, area: Rect) {
         ),
     };
 
-    let elapsed = format!("{:>02}:{:>02}", app.scan_elapsed.as_secs() / 60, app.scan_elapsed.as_secs() % 60);
+    let elapsed = format!(
+        "{:>02}:{:>02}",
+        app.scan_elapsed.as_secs() / 60,
+        app.scan_elapsed.as_secs() % 60
+    );
 
-    let header = Line::from(vec![
+    let mut header_spans = vec![
         Span::styled(" state: ", Style::default().fg(DIM())),
         state_str,
         Span::styled("  elapsed: ", Style::default().fg(DIM())),
@@ -532,15 +546,32 @@ fn render_scan_summary(f: &mut Frame, app: &App, area: Rect) {
             format!("{}", app.scan_hosts.len()),
             Style::default().fg(TEXT()),
         ),
-        if app.hosts_up + app.hosts_down > 0 {
-            Span::styled(
-                format!("  (up {} / down {})", app.hosts_up, app.hosts_down),
+    ];
+    if app.hosts_up + app.hosts_down > 0 {
+        header_spans.push(Span::styled(
+            format!("  (up {} / down {})", app.hosts_up, app.hosts_down),
+            Style::default().fg(DIM()),
+        ));
+    }
+    if let Some(eta) = app.scan_eta_secs {
+        if matches!(
+            app.scan_state,
+            ScanState::Running | ScanState::Paused
+        ) {
+            header_spans.push(Span::styled(
+                format!("  eta: {}", format_hms(eta)),
                 Style::default().fg(DIM()),
-            )
-        } else {
-            Span::raw("")
-        },
-    ]);
+            ));
+        }
+    }
+    let header = Line::from(header_spans);
+
+    // Progress bar line — only rendered during Running or Paused with a known percent.
+    let progress_line = if matches!(app.scan_state, ScanState::Running | ScanState::Paused) {
+        Some(progress_bar_line(app.scan_progress))
+    } else {
+        None
+    };
 
     let command_line = if app.scan_command.is_empty() {
         "no scan yet — press Enter on a target group to start".to_string()
@@ -552,13 +583,52 @@ fn render_scan_summary(f: &mut Frame, app: &App, area: Rect) {
         Span::styled(command_line, Style::default().fg(OK())),
     ]);
 
-    let para = Paragraph::new(vec![header, cmd]).block(
+    let mut lines = vec![header];
+    if let Some(pl) = progress_line {
+        lines.push(pl);
+    }
+    lines.push(cmd);
+
+    let para = Paragraph::new(lines).block(
         Block::default()
             .borders(Borders::ALL)
             .border_style(Style::default().fg(BORDER()))
             .title(" Scan "),
     );
     f.render_widget(para, area);
+}
+
+fn progress_bar_line(percent: Option<f32>) -> Line<'static> {
+    let width: usize = 36;
+    let (pct, label) = match percent {
+        Some(p) => (p.clamp(0.0, 100.0), format!("{:>5.1}%", p)),
+        None => (0.0, "  …  ".to_string()),
+    };
+    let filled = ((pct / 100.0) * width as f32).round() as usize;
+    let filled = filled.min(width);
+    let bar_filled: String = "█".repeat(filled);
+    let bar_empty: String = "·".repeat(width - filled);
+    Line::from(vec![
+        Span::styled(" prog:  ", Style::default().fg(DIM())),
+        Span::styled("[", Style::default().fg(DIM())),
+        Span::styled(bar_filled, Style::default().fg(ACCENT()).bold()),
+        Span::styled(bar_empty, Style::default().fg(DIM())),
+        Span::styled("] ", Style::default().fg(DIM())),
+        Span::styled(label, Style::default().fg(TEXT())),
+    ])
+}
+
+fn format_hms(secs: u64) -> String {
+    let h = secs / 3600;
+    let m = (secs % 3600) / 60;
+    let s = secs % 60;
+    if h > 0 {
+        format!("{}h{:02}m{:02}s", h, m, s)
+    } else if m > 0 {
+        format!("{}m{:02}s", m, s)
+    } else {
+        format!("{}s", s)
+    }
 }
 
 fn render_host_list(f: &mut Frame, app: &App, area: Rect) {
@@ -597,6 +667,7 @@ fn render_host_list(f: &mut Frame, app: &App, area: Rect) {
         let msg = match app.scan_state {
             ScanState::Idle => "No scan yet. Press [1], select a group, press Enter.",
             ScanState::Running => "Scanning… hosts will appear as nmap reports them.",
+            ScanState::Paused => "Scan paused. Press [p] to resume.",
             ScanState::Finished => "Scan finished with no hosts (filtered or down).",
             ScanState::Failed => "Scan failed. See status bar.",
         };
@@ -1015,7 +1086,7 @@ fn render_status(f: &mut Frame, app: &App, area: Rect) {
     let hint = match app.tab {
         Tab::Targets => " [↑↓/jk] nav   [Enter] run scan   [a]dd   [e]dit   [d]elete   [t] theme   [?] help ",
         Tab::Profiles => " [↑↓/jk] nav   [Enter] run scan   [a]dd   [e]dit   [d]elete   [t] theme   [?] help ",
-        Tab::Scan => " [↑↓/jk] hosts   [x] stop   [Enter] rerun   [Shift+E] export   [4] history ",
+        Tab::Scan => " [↑↓/jk] hosts   [p]ause   [x] stop   [Enter] rerun   [Shift+E] export ",
         Tab::History => " [↑↓/jk] navigate   [m] mark   [d] diff marked↔current   [e] export   [r] reload   [Esc] clear ",
     };
     let mut spans: Vec<Span> = vec![Span::styled(hint, Style::default().fg(DIM()))];
@@ -1298,6 +1369,7 @@ fn render_help_overlay(f: &mut Frame, area: Rect) {
         Line::from(" [a/e/d]   add / edit / delete (Targets & Profiles tabs)"),
         Line::from(" [t]       cycle theme (dark / solarized / dracula / nord / gruvbox)"),
         Line::from(" [Ctrl+S]  save form   [Esc]  cancel form"),
+        Line::from(" [p]       pause / resume a running scan (SIGSTOP/SIGCONT)"),
         Line::from(" [x]       stop a running scan"),
         Line::from(" [Shift+E] export incident bundle (Scan tab)"),
         Line::from(" [m]       mark scan for diff  (History tab)"),

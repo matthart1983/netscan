@@ -12,11 +12,12 @@ netscan wraps the `nmap` engine with a real workflow: target inventory, saved sc
 live streaming results as each host comes in, and (soon) scan history with differential
 scanning. One binary. No config required on first run.
 
-**Status:** v0.5. Target inventory, **target and profile CRUD via TUI forms**,
-live streaming scan view, SQLite-backed scan history, automatic differential
-scanning, incident bundle export, manual diff between any two historical
-scans, opt-in AI triage via local or remote Ollama, and **5 built-in themes**
-are all working. NSE script picker and scheduled/daemon mode are next.
+**Status:** v0.6. Target and profile CRUD via TUI forms, live streaming scan
+view with **real-time progress bar + ETA** and **pause/resume**, SQLite-backed
+scan history, automatic differential scanning, incident bundle export, manual
+diff between any two historical scans, opt-in AI triage via local or remote
+Ollama, and 5 built-in themes are all working. NSE script picker and
+scheduled/daemon mode are next.
 
 ---
 
@@ -71,6 +72,7 @@ netscan --config-paths   # show where config and data live
 | `Tab` | Next tab |
 | `↑↓` / `j` `k` | Navigate lists |
 | `Enter` | Run scan with selected target group + profile |
+| `p` | Pause / resume a running scan (SIGSTOP / SIGCONT) |
 | `x` | Stop a running scan |
 | `Shift+E` | Export incident bundle (Scan tab) |
 | `m` | Mark a scan for diff (History tab) |
@@ -223,6 +225,8 @@ never need to include those yourself.
 - [x] Target group CRUD via TUI form
 - [x] Scan profile CRUD via TUI form
 - [x] Theme system (5 built-in themes, persisted)
+- [x] Live progress bar + ETA from nmap's `--stats-every` on stderr
+- [x] Pause / resume running scans via SIGSTOP / SIGCONT
 - [ ] NSE script picker
 - [ ] Scheduled / daemon mode for background scans
 - [ ] Webhook alerts on change

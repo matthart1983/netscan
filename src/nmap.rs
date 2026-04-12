@@ -13,6 +13,10 @@ pub enum ScanEvent {
         command: String,
     },
     HostComplete(Host),
+    Progress {
+        percent: f32,
+        eta_secs: Option<u64>,
+    },
     RunFinished {
         summary: String,
         hosts_up: usize,
@@ -35,10 +39,44 @@ impl ScanHandle {
     pub fn try_kill(&mut self) {
         let _ = self.child.kill();
     }
+
+    #[cfg(unix)]
+    pub fn pause(&self) -> Result<()> {
+        let pid = self.child.id() as i32;
+        let rc = unsafe { libc::kill(pid, libc::SIGSTOP) };
+        if rc == 0 {
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!("kill(SIGSTOP) failed: {}", std::io::Error::last_os_error()))
+        }
+    }
+
+    #[cfg(unix)]
+    pub fn resume(&self) -> Result<()> {
+        let pid = self.child.id() as i32;
+        let rc = unsafe { libc::kill(pid, libc::SIGCONT) };
+        if rc == 0 {
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!("kill(SIGCONT) failed: {}", std::io::Error::last_os_error()))
+        }
+    }
+
+    #[cfg(not(unix))]
+    pub fn pause(&self) -> Result<()> {
+        Err(anyhow::anyhow!("pause is only supported on Unix platforms"))
+    }
+
+    #[cfg(not(unix))]
+    pub fn resume(&self) -> Result<()> {
+        Err(anyhow::anyhow!("resume is only supported on Unix platforms"))
+    }
 }
 
 pub fn build_command(profile: &Profile, group: &TargetGroup) -> Vec<String> {
-    let mut args: Vec<String> = shell_split(&profile.flags);
+    // Always ask nmap for per-second progress updates on stderr.
+    let mut args: Vec<String> = vec!["--stats-every".to_string(), "1s".to_string()];
+    args.extend(shell_split(&profile.flags));
     // Always request XML on stdout.
     args.push("-oX".to_string());
     args.push("-".to_string());
@@ -79,7 +117,7 @@ pub fn spawn(profile: &Profile, group: &TargetGroup) -> Result<ScanHandle> {
     let mut child = Command::new("nmap")
         .args(&args)
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .spawn()
         .context("failed to spawn nmap")?;
 
@@ -87,6 +125,11 @@ pub fn spawn(profile: &Profile, group: &TargetGroup) -> Result<ScanHandle> {
         .stdout
         .take()
         .context("nmap stdout pipe missing")?;
+    let stderr = child
+        .stderr
+        .take()
+        .context("nmap stderr pipe missing")?;
+
     let (tx, rx) = mpsc::channel::<ScanEvent>();
 
     let started_cmd = command_line.clone();
@@ -94,10 +137,21 @@ pub fn spawn(profile: &Profile, group: &TargetGroup) -> Result<ScanHandle> {
         command: started_cmd,
     });
 
+    let tx_out = tx.clone();
     thread::spawn(move || {
         let reader = BufReader::new(stdout);
-        if let Err(e) = parse_stream(reader, &tx) {
-            let _ = tx.send(ScanEvent::Error(format!("parse error: {e}")));
+        if let Err(e) = parse_stream(reader, &tx_out) {
+            let _ = tx_out.send(ScanEvent::Error(format!("parse error: {e}")));
+        }
+    });
+
+    // Stats parser reads nmap's --stats-every output from stderr.
+    thread::spawn(move || {
+        let reader = BufReader::new(stderr);
+        for line in reader.lines().flatten() {
+            if let Some(progress) = parse_stats_line(&line) {
+                let _ = tx.send(progress);
+            }
         }
     });
 
@@ -106,6 +160,51 @@ pub fn spawn(profile: &Profile, group: &TargetGroup) -> Result<ScanHandle> {
         rx,
         child,
     })
+}
+
+/// Parse a single line from nmap's stderr for progress information.
+///
+/// The relevant lines look like:
+///   `Connect Scan Timing: About 12.34% done; ETC: 11:30 (0:00:07 remaining)`
+/// We don't care which scan type (Connect / SYN / UDP) — just the percent
+/// and remaining-time fields.
+pub fn parse_stats_line(line: &str) -> Option<ScanEvent> {
+    if !line.contains("% done") {
+        return None;
+    }
+    let about_start = line.find("About ")? + "About ".len();
+    let pct_end = line[about_start..].find('%')?;
+    let pct_str = line[about_start..about_start + pct_end].trim();
+    let percent: f32 = pct_str.parse().ok()?;
+
+    // "remaining)" may or may not be present — early reports sometimes omit ETC.
+    let eta_secs = if let Some(rem_pos) = line.find(" remaining)") {
+        line[..rem_pos]
+            .rfind('(')
+            .and_then(|lp| parse_hms(&line[lp + 1..rem_pos]))
+    } else {
+        None
+    };
+
+    Some(ScanEvent::Progress { percent, eta_secs })
+}
+
+fn parse_hms(s: &str) -> Option<u64> {
+    let parts: Vec<&str> = s.split(':').collect();
+    match parts.len() {
+        3 => {
+            let h: u64 = parts[0].parse().ok()?;
+            let m: u64 = parts[1].parse().ok()?;
+            let sec: u64 = parts[2].parse().ok()?;
+            Some(h * 3600 + m * 60 + sec)
+        }
+        2 => {
+            let m: u64 = parts[0].parse().ok()?;
+            let sec: u64 = parts[1].parse().ok()?;
+            Some(m * 60 + sec)
+        }
+        _ => None,
+    }
 }
 
 fn parse_stream<R: BufRead>(reader: R, tx: &Sender<ScanEvent>) -> Result<()> {
@@ -466,6 +565,99 @@ mod tests {
             events.iter().find(|e| matches!(e, ScanEvent::RunFinished { .. })),
             Some(_)
         ));
+    }
+
+    #[test]
+    fn parses_progress_line_with_eta() {
+        let line =
+            "Connect Scan Timing: About 42.5% done; ETC: 11:45 (0:01:23 remaining)";
+        let ev = parse_stats_line(line).unwrap();
+        match ev {
+            ScanEvent::Progress { percent, eta_secs } => {
+                assert!((percent - 42.5).abs() < 0.001);
+                assert_eq!(eta_secs, Some(83));
+            }
+            _ => panic!("expected Progress event"),
+        }
+    }
+
+    #[test]
+    fn parses_progress_line_mmss_remaining() {
+        let line = "SYN Stealth Scan Timing: About 8.12% done; ETC: 11:30 (02:45 remaining)";
+        let ev = parse_stats_line(line).unwrap();
+        match ev {
+            ScanEvent::Progress { percent, eta_secs } => {
+                assert!((percent - 8.12).abs() < 0.001);
+                assert_eq!(eta_secs, Some(165));
+            }
+            _ => panic!("expected Progress event"),
+        }
+    }
+
+    #[test]
+    fn parses_progress_line_without_eta() {
+        let line = "Service scan Timing: About 15.00% done";
+        let ev = parse_stats_line(line).unwrap();
+        match ev {
+            ScanEvent::Progress { percent, eta_secs } => {
+                assert!((percent - 15.0).abs() < 0.001);
+                assert_eq!(eta_secs, None);
+            }
+            _ => panic!("expected Progress event"),
+        }
+    }
+
+    #[test]
+    fn ignores_non_progress_lines() {
+        assert!(parse_stats_line("Starting Nmap 7.95").is_none());
+        assert!(parse_stats_line("Stats: 0:00:05 elapsed; 0 hosts completed").is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn live_pause_and_resume_roundtrip() {
+        if std::process::Command::new("nmap")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            return;
+        }
+        // Use a long-running scan so we have time to pause mid-flight.
+        let profile = Profile {
+            name: "test".into(),
+            description: "".into(),
+            flags: "-T4 -p 1-200".into(),
+        };
+        let group = TargetGroup {
+            name: "test".into(),
+            description: "".into(),
+            targets: vec!["127.0.0.1".into()],
+        };
+        let mut handle = spawn(&profile, &group).unwrap();
+        // Give nmap a moment to start actually producing work.
+        std::thread::sleep(std::time::Duration::from_millis(500));
+
+        handle.pause().expect("pause (SIGSTOP) failed");
+
+        // After SIGSTOP, the child's /proc/<pid>/stat state should flip to T on Linux.
+        // On macOS there's no /proc; simply ensure the process is still reachable and
+        // exactly one pause→resume cycle completes without error, then let the scan
+        // finish normally.
+        std::thread::sleep(std::time::Duration::from_millis(300));
+
+        handle.resume().expect("resume (SIGCONT) failed");
+
+        // Drain until exit to avoid leaving a zombie around.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while std::time::Instant::now() < deadline {
+            match handle.rx.recv_timeout(std::time::Duration::from_millis(200)) {
+                Ok(ScanEvent::Exited { .. }) => break,
+                Ok(_) => {}
+                Err(_) => {}
+            }
+        }
+        let _ = handle.child.wait();
     }
 
     #[test]

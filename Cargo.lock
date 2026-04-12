@@ -1021,6 +1021,7 @@ dependencies = [
  "clap",
  "crossterm",
  "directories",
+ "libc",
  "quick-xml",
  "ratatui",
  "rusqlite",

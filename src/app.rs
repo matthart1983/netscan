@@ -34,6 +34,7 @@ impl Tab {
 pub enum ScanState {
     Idle,
     Running,
+    Paused,
     Finished,
     Failed,
 }
@@ -248,6 +249,9 @@ pub struct App {
     pub scan_error: Option<String>,
     pub hosts_up: usize,
     pub hosts_down: usize,
+    pub scan_progress: Option<f32>,
+    pub scan_eta_secs: Option<u64>,
+    pub scan_paused_elapsed: Duration,
     pub last_diff: Option<ScanDiff>,
     pub toast: Option<(String, Instant)>,
 
@@ -308,6 +312,9 @@ impl App {
             scan_error: None,
             hosts_up: 0,
             hosts_down: 0,
+            scan_progress: None,
+            scan_eta_secs: None,
+            scan_paused_elapsed: Duration::ZERO,
             last_diff: None,
             toast: None,
             history_entries: Vec::new(),
@@ -369,6 +376,7 @@ impl App {
             if matches!(self.scan_state, ScanState::Running) {
                 self.scan_elapsed = started.elapsed();
             }
+            // When paused, scan_elapsed holds the frozen value from the pause moment.
         }
         if let Some((_, at)) = &self.toast {
             if at.elapsed() > Duration::from_secs(4) {
@@ -387,6 +395,10 @@ impl App {
                     }
                     ScanEvent::HostComplete(host) => {
                         self.scan_hosts.push(host);
+                    }
+                    ScanEvent::Progress { percent, eta_secs } => {
+                        self.scan_progress = Some(percent);
+                        self.scan_eta_secs = eta_secs;
                     }
                     ScanEvent::RunFinished {
                         summary,
@@ -1170,6 +1182,9 @@ impl App {
             KeyCode::Char('x') => {
                 self.stop_scan();
             }
+            KeyCode::Char('p') => {
+                self.toggle_pause();
+            }
             KeyCode::Enter => {
                 if matches!(
                     self.scan_state,
@@ -1182,6 +1197,40 @@ impl App {
                 if matches!(self.scan_state, ScanState::Finished) {
                     self.export_last_scan();
                 }
+            }
+            _ => {}
+        }
+    }
+
+    fn toggle_pause(&mut self) {
+        match self.scan_state {
+            ScanState::Running => {
+                // Save current elapsed and send SIGSTOP.
+                if let Some(h) = self.handle.as_ref() {
+                    if let Err(e) = h.pause() {
+                        self.scan_error = Some(format!("pause failed: {e}"));
+                        return;
+                    }
+                }
+                if let Some(started) = self.scan_started {
+                    self.scan_elapsed = started.elapsed();
+                }
+                self.scan_paused_elapsed = self.scan_elapsed;
+                self.scan_state = ScanState::Paused;
+                self.toast = Some(("scan paused".to_string(), Instant::now()));
+            }
+            ScanState::Paused => {
+                // Send SIGCONT and rebase scan_started so elapsed keeps ticking correctly.
+                if let Some(h) = self.handle.as_ref() {
+                    if let Err(e) = h.resume() {
+                        self.scan_error = Some(format!("resume failed: {e}"));
+                        return;
+                    }
+                }
+                // Rebase scan_started: effective start = now - previously-elapsed
+                self.scan_started = Some(Instant::now() - self.scan_paused_elapsed);
+                self.scan_state = ScanState::Running;
+                self.toast = Some(("scan resumed".to_string(), Instant::now()));
             }
             _ => {}
         }
@@ -1243,6 +1292,9 @@ impl App {
                 self.scan_error = None;
                 self.hosts_up = 0;
                 self.hosts_down = 0;
+                self.scan_progress = None;
+                self.scan_eta_secs = None;
+                self.scan_paused_elapsed = Duration::ZERO;
                 self.last_diff = None;
                 self.ai_state = if self.config.ai.enabled {
                     AiState::Pending
