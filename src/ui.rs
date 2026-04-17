@@ -1107,6 +1107,24 @@ fn render_status(f: &mut Frame, app: &App, area: Rect) {
             Style::default().fg(OK()),
         ));
     }
+
+    if app.has_schedules() {
+        if let Some((next_at, target, profile)) = app.next_scheduled() {
+            let now = crate::history::now_secs();
+            let secs_left = (next_at - now).max(0);
+            let label = if secs_left <= 0 {
+                format!("  [{target}/{profile} due]")
+            } else if secs_left < 60 {
+                format!("  [{target}/{profile} in {secs_left}s]")
+            } else if secs_left < 3600 {
+                format!("  [{target}/{profile} in {}m]", secs_left / 60)
+            } else {
+                format!("  [{target}/{profile} in {}h {}m]", secs_left / 3600, (secs_left % 3600) / 60)
+            };
+            spans.push(Span::styled(label, Style::default().fg(DIM())));
+        }
+    }
+
     let para = Paragraph::new(Line::from(spans));
     f.render_widget(para, area);
 }

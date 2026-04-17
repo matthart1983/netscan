@@ -41,11 +41,26 @@ impl Paths {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScheduleConfig {
+    pub target: String,
+    pub profile: String,
+    pub interval_secs: u64,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     #[serde(default)]
     pub ai: AiConfig,
     #[serde(default)]
     pub ui: UiConfig,
+    #[serde(default)]
+    pub schedules: Vec<ScheduleConfig>,
 }
 
 impl Default for AppConfig {
@@ -53,6 +68,7 @@ impl Default for AppConfig {
         Self {
             ai: AiConfig::default(),
             ui: UiConfig::default(),
+            schedules: Vec::new(),
         }
     }
 }

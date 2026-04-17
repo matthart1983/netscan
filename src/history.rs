@@ -331,6 +331,21 @@ impl Store {
         }))
     }
 
+    pub fn latest_scan_for(&self, group_name: &str, profile_name: &str) -> Result<Option<i64>> {
+        let result: Option<i64> = self
+            .conn
+            .query_row(
+                r#"SELECT started_at FROM scans
+                   WHERE group_name = ?1 AND profile_name = ?2 AND status = 'finished'
+                   ORDER BY started_at DESC
+                   LIMIT 1"#,
+                params![group_name, profile_name],
+                |row| row.get(0),
+            )
+            .ok();
+        Ok(result)
+    }
+
     #[allow(dead_code)]
     pub fn delete_scan(&self, id: &str) -> Result<()> {
         self.conn.execute("DELETE FROM scans WHERE id = ?1", params![id])?;

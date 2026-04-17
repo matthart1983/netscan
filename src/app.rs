@@ -3,6 +3,7 @@ use crate::config::{AppConfig, Paths};
 use crate::diff::{self, ScanDiff};
 use crate::history::{self, ScanRecord, ScanSummary, Store};
 use crate::nmap::{self, ScanEvent, ScanHandle};
+use crate::scheduler::{ScanRequest, Scheduler};
 use crate::types::{Host, Profile, TargetGroup};
 use crate::ui;
 use crate::Tui;
@@ -281,6 +282,10 @@ pub struct App {
     last_tick: Instant,
     pub show_help: bool,
     should_quit: bool,
+
+    // Scheduler
+    scheduler: Scheduler,
+    pub scan_scheduled: bool,
 }
 
 impl App {
@@ -291,6 +296,7 @@ impl App {
         paths: Paths,
         config: AppConfig,
     ) -> Self {
+        let scheduler = Scheduler::new(&config.schedules, &store);
         Self {
             tab: Tab::Targets,
             targets,
@@ -335,6 +341,8 @@ impl App {
             last_tick: Instant::now(),
             show_help: false,
             should_quit: false,
+            scheduler,
+            scan_scheduled: false,
         }
     }
 
@@ -376,13 +384,44 @@ impl App {
             if matches!(self.scan_state, ScanState::Running) {
                 self.scan_elapsed = started.elapsed();
             }
-            // When paused, scan_elapsed holds the frozen value from the pause moment.
         }
         if let Some((_, at)) = &self.toast {
             if at.elapsed() > Duration::from_secs(4) {
                 self.toast = None;
             }
         }
+        self.check_scheduler();
+    }
+
+    fn check_scheduler(&mut self) {
+        if matches!(self.scan_state, ScanState::Running | ScanState::Paused) {
+            return;
+        }
+        let now = history::now_secs();
+        if let Some(req) = self.scheduler.tick(now) {
+            self.launch_scheduled_scan(req);
+        }
+    }
+
+    fn launch_scheduled_scan(&mut self, req: ScanRequest) {
+        let group = self.targets.iter().find(|g| g.name == req.target_name);
+        let profile = self.profiles.iter().find(|p| p.name == req.profile_name);
+        let (Some(group), Some(profile)) = (group.cloned(), profile.cloned()) else {
+            self.toast = Some((
+                format!("schedule skipped: target '{}' or profile '{}' not found", req.target_name, req.profile_name),
+                Instant::now(),
+            ));
+            return;
+        };
+        self.launch_scan(&group, &profile, true);
+    }
+
+    pub fn next_scheduled(&self) -> Option<(i64, &str, &str)> {
+        self.scheduler.next_due()
+    }
+
+    pub fn has_schedules(&self) -> bool {
+        !self.scheduler.is_empty()
     }
 
     fn drain_scan_events(&mut self) {
@@ -527,7 +566,15 @@ impl App {
         self.history_entries.clear();
         self.history_selected = None;
 
-        self.toast = Some(("scan saved to history".to_string(), Instant::now()));
+        if self.scan_scheduled {
+            self.scheduler.notify_complete(&record.group_name, &record.profile_name, history::now_secs());
+            self.toast = Some((
+                format!("[scheduled] {}/{} saved to history", record.group_name, record.profile_name),
+                Instant::now(),
+            ));
+        } else {
+            self.toast = Some(("scan saved to history".to_string(), Instant::now()));
+        }
     }
 
     fn reload_history(&mut self) {
@@ -1274,8 +1321,11 @@ impl App {
         let Some(profile) = self.profiles.get(self.profile_index).cloned() else {
             return;
         };
+        self.launch_scan(&group, &profile, false);
+    }
 
-        match nmap::spawn(&profile, &group) {
+    fn launch_scan(&mut self, group: &TargetGroup, profile: &Profile, scheduled: bool) {
+        match nmap::spawn(profile, group) {
             Ok(handle) => {
                 self.scan_id = history::short_id();
                 self.scan_flags = profile.flags.clone();
@@ -1296,6 +1346,7 @@ impl App {
                 self.scan_eta_secs = None;
                 self.scan_paused_elapsed = Duration::ZERO;
                 self.last_diff = None;
+                self.scan_scheduled = scheduled;
                 self.ai_state = if self.config.ai.enabled {
                     AiState::Pending
                 } else {
