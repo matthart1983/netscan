@@ -24,9 +24,7 @@ impl Scheduler {
             .iter()
             .filter(|s| s.enabled)
             .map(|s| {
-                let last_run = store
-                    .latest_scan_for(&s.target, &s.profile)
-                    .unwrap_or(None);
+                let last_run = store.latest_scan_for(&s.target, &s.profile).unwrap_or(None);
                 let next_run = match last_run {
                     Some(t) => t + s.interval_secs as i64,
                     None => now,
@@ -68,10 +66,13 @@ impl Scheduler {
     }
 
     pub fn next_due(&self) -> Option<(i64, &str, &str)> {
-        self.entries
-            .iter()
-            .min_by_key(|e| e.next_run)
-            .map(|e| (e.next_run, e.config.target.as_str(), e.config.profile.as_str()))
+        self.entries.iter().min_by_key(|e| e.next_run).map(|e| {
+            (
+                e.next_run,
+                e.config.target.as_str(),
+                e.config.profile.as_str(),
+            )
+        })
     }
 
     pub fn is_empty(&self) -> bool {

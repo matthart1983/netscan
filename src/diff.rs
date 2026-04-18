@@ -22,11 +22,11 @@ pub struct HostChange {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HostChangeKind {
-    New,         // host present only in curr
-    Removed,     // host present only in prev
+    New,           // host present only in curr
+    Removed,       // host present only in prev
     StatusChanged, // was down, now up, or vice versa
-    Modified,    // same host, ports or services changed
-    Unchanged,   // included only if we ever want to surface a full list
+    Modified,      // same host, ports or services changed
+    Unchanged,     // included only if we ever want to surface a full list
 }
 
 #[derive(Debug, Clone)]
@@ -44,11 +44,11 @@ pub struct PortChange {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PortChangeKind {
-    NewlyOpen,       // wasn't seen before, now open
-    NewlyClosed,     // was open, now closed/filtered/missing
-    StateChanged,    // e.g. filtered → open
-    ServiceChanged,  // same state, different service name
-    VersionChanged,  // same service, different product/version
+    NewlyOpen,      // wasn't seen before, now open
+    NewlyClosed,    // was open, now closed/filtered/missing
+    StateChanged,   // e.g. filtered → open
+    ServiceChanged, // same state, different service name
+    VersionChanged, // same service, different product/version
 }
 
 impl ScanDiff {
@@ -227,10 +227,8 @@ fn kind_order(k: HostChangeKind) -> u8 {
 
 fn diff_ports(prev: &Host, curr: &Host) -> Vec<PortChange> {
     let key = |p: &Port| (p.protocol.clone(), p.port);
-    let prev_map: BTreeMap<(String, u16), &Port> =
-        prev.ports.iter().map(|p| (key(p), p)).collect();
-    let curr_map: BTreeMap<(String, u16), &Port> =
-        curr.ports.iter().map(|p| (key(p), p)).collect();
+    let prev_map: BTreeMap<(String, u16), &Port> = prev.ports.iter().map(|p| (key(p), p)).collect();
+    let curr_map: BTreeMap<(String, u16), &Port> = curr.ports.iter().map(|p| (key(p), p)).collect();
 
     let mut all_keys: BTreeSet<(String, u16)> = BTreeSet::new();
     for k in prev_map.keys() {
@@ -309,7 +307,10 @@ fn diff_ports(prev: &Host, curr: &Host) -> Vec<PortChange> {
                         curr_version: version_string(cp),
                     });
                 } else if version_string(pp) != version_string(cp)
-                    && (pp.version.is_some() || cp.version.is_some() || pp.product.is_some() || cp.product.is_some())
+                    && (pp.version.is_some()
+                        || cp.version.is_some()
+                        || pp.product.is_some()
+                        || cp.product.is_some())
                 {
                     out.push(PortChange {
                         protocol: cp.protocol.clone(),
@@ -343,11 +344,7 @@ fn version_string(p: &Port) -> Option<String> {
 pub fn render_markdown(diff: &ScanDiff) -> String {
     use std::fmt::Write;
     let mut s = String::new();
-    let _ = writeln!(
-        s,
-        "# Diff: {} → {}\n",
-        diff.prev_id, diff.curr_id
-    );
+    let _ = writeln!(s, "# Diff: {} → {}\n", diff.prev_id, diff.curr_id);
     let _ = writeln!(s, "{}\n", diff.summary());
 
     if diff.is_empty() {
@@ -427,7 +424,13 @@ mod tests {
     use super::*;
     use crate::types::{Host, HostStatus, Port, PortState};
 
-    fn port(proto: &str, p: u16, state: PortState, service: Option<&str>, version: Option<&str>) -> Port {
+    fn port(
+        proto: &str,
+        p: u16,
+        state: PortState,
+        service: Option<&str>,
+        version: Option<&str>,
+    ) -> Port {
         Port {
             protocol: proto.to_string(),
             port: p,
@@ -492,10 +495,7 @@ mod tests {
 
     #[test]
     fn detects_removed_host() {
-        let prev = record(
-            "a",
-            vec![host("10.0.0.2", HostStatus::Up, vec![])],
-        );
+        let prev = record("a", vec![host("10.0.0.2", HostStatus::Up, vec![])]);
         let curr = record("b", vec![]);
         let d = compute(&prev, &curr);
         assert_eq!(d.host_changes.len(), 1);
@@ -549,7 +549,13 @@ mod tests {
             vec![host(
                 "10.0.0.4",
                 HostStatus::Up,
-                vec![port("tcp", 8080, PortState::Closed, Some("http-proxy"), None)],
+                vec![port(
+                    "tcp",
+                    8080,
+                    PortState::Closed,
+                    Some("http-proxy"),
+                    None,
+                )],
             )],
         );
         let d = compute(&prev, &curr);

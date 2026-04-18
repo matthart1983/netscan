@@ -222,7 +222,17 @@ impl Store {
 
     pub fn get_scan(&self, id: &str) -> Result<Option<ScanRecord>> {
         let scan_row: Option<(
-            String, String, String, String, String, i64, Option<i64>, String, String, i64, i64,
+            String,
+            String,
+            String,
+            String,
+            String,
+            i64,
+            Option<i64>,
+            String,
+            String,
+            i64,
+            i64,
         )> = self
             .conn
             .query_row(
@@ -349,7 +359,8 @@ impl Store {
 
     #[allow(dead_code)]
     pub fn delete_scan(&self, id: &str) -> Result<()> {
-        self.conn.execute("DELETE FROM scans WHERE id = ?1", params![id])?;
+        self.conn
+            .execute("DELETE FROM scans WHERE id = ?1", params![id])?;
         Ok(())
     }
 }
@@ -534,9 +545,15 @@ mod tests {
     fn list_scans_orders_by_started_desc() {
         let db = tmp_db();
         let mut store = Store::open(&db).unwrap();
-        store.insert_scan(&sample_record("a", "g", "p", 1000)).unwrap();
-        store.insert_scan(&sample_record("b", "g", "p", 2000)).unwrap();
-        store.insert_scan(&sample_record("c", "g", "p", 1500)).unwrap();
+        store
+            .insert_scan(&sample_record("a", "g", "p", 1000))
+            .unwrap();
+        store
+            .insert_scan(&sample_record("b", "g", "p", 2000))
+            .unwrap();
+        store
+            .insert_scan(&sample_record("c", "g", "p", 1500))
+            .unwrap();
         let list = store.list_scans(10).unwrap();
         assert_eq!(list.len(), 3);
         assert_eq!(list[0].id, "b"); // newest first
@@ -548,11 +565,19 @@ mod tests {
     fn previous_scan_picks_latest_before_cutoff() {
         let db = tmp_db();
         let mut store = Store::open(&db).unwrap();
-        store.insert_scan(&sample_record("old", "g", "p", 100)).unwrap();
-        store.insert_scan(&sample_record("mid", "g", "p", 200)).unwrap();
-        store.insert_scan(&sample_record("new", "g", "p", 300)).unwrap();
+        store
+            .insert_scan(&sample_record("old", "g", "p", 100))
+            .unwrap();
+        store
+            .insert_scan(&sample_record("mid", "g", "p", 200))
+            .unwrap();
+        store
+            .insert_scan(&sample_record("new", "g", "p", 300))
+            .unwrap();
         // other group shouldn't match
-        store.insert_scan(&sample_record("other", "other", "p", 250)).unwrap();
+        store
+            .insert_scan(&sample_record("other", "other", "p", 250))
+            .unwrap();
 
         let prev = store.previous_scan("g", "p", 300).unwrap().unwrap();
         assert_eq!(prev.id, "mid");

@@ -1,14 +1,12 @@
-use crate::app::{
-    AiState, App, FormField, FormMode, ProfileFormField, ScanState, Tab,
-};
+use crate::app::{AiState, App, FormField, FormMode, ProfileFormField, ScanState, Tab};
 use crate::diff::{HostChangeKind, PortChangeKind, ScanDiff};
 use crate::history::{self, ScanSummary};
 use crate::theme::{self, Theme};
 use crate::types::{Host, HostStatus, Port, PortState};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
 #[allow(unused_imports)]
 use ratatui::style::Stylize;
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::symbols::Marker;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::canvas::{Canvas, Line as CanvasLine};
@@ -22,25 +20,45 @@ thread_local! {
     static CURRENT_THEME: std::cell::Cell<Theme> = std::cell::Cell::new(theme::DARK);
 }
 
-fn set_theme(t: Theme) { CURRENT_THEME.with(|c| c.set(t)); }
-fn theme_now() -> Theme { CURRENT_THEME.with(|c| c.get()) }
+fn set_theme(t: Theme) {
+    CURRENT_THEME.with(|c| c.set(t));
+}
+fn theme_now() -> Theme {
+    CURRENT_THEME.with(|c| c.get())
+}
 
 #[allow(non_snake_case)]
-fn ACCENT() -> Color { theme_now().accent }
+fn ACCENT() -> Color {
+    theme_now().accent
+}
 #[allow(non_snake_case)]
-fn DIM() -> Color { theme_now().dim }
+fn DIM() -> Color {
+    theme_now().dim
+}
 #[allow(non_snake_case)]
-fn BORDER() -> Color { theme_now().border }
+fn BORDER() -> Color {
+    theme_now().border
+}
 #[allow(non_snake_case)]
-fn TEXT() -> Color { theme_now().text }
+fn TEXT() -> Color {
+    theme_now().text
+}
 #[allow(non_snake_case)]
-fn DANGER() -> Color { theme_now().danger }
+fn DANGER() -> Color {
+    theme_now().danger
+}
 #[allow(non_snake_case)]
-fn WARN() -> Color { theme_now().warn }
+fn WARN() -> Color {
+    theme_now().warn
+}
 #[allow(non_snake_case)]
-fn OK() -> Color { theme_now().ok }
+fn OK() -> Color {
+    theme_now().ok
+}
 #[allow(non_snake_case)]
-fn SELECTION_BG() -> Color { theme_now().selection_bg }
+fn SELECTION_BG() -> Color {
+    theme_now().selection_bg
+}
 
 pub fn render(f: &mut Frame, app: &App) {
     set_theme(app.theme);
@@ -65,18 +83,12 @@ pub fn render(f: &mut Frame, app: &App) {
 
     match &app.form_mode {
         FormMode::None => {}
-        FormMode::AddTarget | FormMode::EditTarget(_) => {
-            render_target_form_overlay(f, app, area)
-        }
-        FormMode::DeleteTargetConfirm(_) => {
-            render_delete_confirm_overlay(f, app, area, false)
-        }
+        FormMode::AddTarget | FormMode::EditTarget(_) => render_target_form_overlay(f, app, area),
+        FormMode::DeleteTargetConfirm(_) => render_delete_confirm_overlay(f, app, area, false),
         FormMode::AddProfile | FormMode::EditProfile(_) => {
             render_profile_form_overlay(f, app, area)
         }
-        FormMode::DeleteProfileConfirm(_) => {
-            render_delete_confirm_overlay(f, app, area, true)
-        }
+        FormMode::DeleteProfileConfirm(_) => render_delete_confirm_overlay(f, app, area, true),
     }
 
     if app.topology_open {
@@ -94,10 +106,7 @@ fn render_header(f: &mut Frame, app: &App, area: Rect) {
         .enumerate()
         .map(|(i, t)| {
             Line::from(vec![
-                Span::styled(
-                    format!("[{}] ", i + 1),
-                    Style::default().fg(DIM()),
-                ),
+                Span::styled(format!("[{}] ", i + 1), Style::default().fg(DIM())),
                 Span::styled(t.label(), Style::default().fg(TEXT())),
             ])
         })
@@ -143,14 +152,8 @@ fn render_targets(f: &mut Frame, app: &App, area: Rect) {
         .iter()
         .map(|g| {
             ListItem::new(Line::from(vec![
-                Span::styled(
-                    format!(" {} ", g.name),
-                    Style::default().fg(TEXT()).bold(),
-                ),
-                Span::styled(
-                    format!("({})", g.targets.len()),
-                    Style::default().fg(DIM()),
-                ),
+                Span::styled(format!(" {} ", g.name), Style::default().fg(TEXT()).bold()),
+                Span::styled(format!("({})", g.targets.len()), Style::default().fg(DIM())),
             ]))
         })
         .collect();
@@ -325,12 +328,11 @@ fn render_scan(f: &mut Frame, app: &App, area: Rect) {
     let has_ai = !matches!(app.ai_state, AiState::Off);
 
     // Build vertical layout based on which panes are active.
-    let summary_height =
-        if matches!(app.scan_state, ScanState::Running | ScanState::Paused) {
-            5 // adds a progress bar row
-        } else {
-            4
-        };
+    let summary_height = if matches!(app.scan_state, ScanState::Running | ScanState::Paused) {
+        5 // adds a progress bar row
+    } else {
+        4
+    };
     let mut constraints: Vec<Constraint> = Vec::new();
     constraints.push(Constraint::Length(summary_height)); // summary
     constraints.push(Constraint::Min(0)); // host list + detail
@@ -414,7 +416,9 @@ fn render_ai_pane(f: &mut Frame, app: &App, area: Rect) {
         ],
     };
 
-    let para = Paragraph::new(lines).block(block).wrap(Wrap { trim: false });
+    let para = Paragraph::new(lines)
+        .block(block)
+        .wrap(Wrap { trim: false });
     f.render_widget(para, area);
 }
 
@@ -502,7 +506,10 @@ fn render_diff_pane(f: &mut Frame, diff: &ScanDiff, area: Rect) {
     }
     if diff.host_changes.len() > 8 {
         lines.push(Line::from(Span::styled(
-            format!("  … and {} more. Open in History for full diff.", diff.host_changes.len() - 8),
+            format!(
+                "  … and {} more. Open in History for full diff.",
+                diff.host_changes.len() - 8
+            ),
             Style::default().fg(DIM()),
         )));
     }
@@ -511,7 +518,9 @@ fn render_diff_pane(f: &mut Frame, diff: &ScanDiff, area: Rect) {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(ACCENT()))
         .title(" Diff ");
-    let para = Paragraph::new(lines).block(block).wrap(Wrap { trim: false });
+    let para = Paragraph::new(lines)
+        .block(block)
+        .wrap(Wrap { trim: false });
     f.render_widget(para, area);
 }
 
@@ -560,10 +569,7 @@ fn render_scan_summary(f: &mut Frame, app: &App, area: Rect) {
         ));
     }
     if let Some(eta) = app.scan_eta_secs {
-        if matches!(
-            app.scan_state,
-            ScanState::Running | ScanState::Paused
-        ) {
+        if matches!(app.scan_state, ScanState::Running | ScanState::Paused) {
             header_spans.push(Span::styled(
                 format!("  eta: {}", format_hms(eta)),
                 Style::default().fg(DIM()),
@@ -651,15 +657,16 @@ fn render_host_list(f: &mut Frame, app: &App, area: Rect) {
                 Some(hn) => format!("{hn} ({})", h.address),
                 None => h.address.clone(),
             };
-            let open_ports = h.ports.iter().filter(|p| p.state == PortState::Open).count();
+            let open_ports = h
+                .ports
+                .iter()
+                .filter(|p| p.state == PortState::Open)
+                .count();
             ListItem::new(Line::from(vec![
                 dot,
                 Span::styled(label, Style::default().fg(TEXT())),
                 Span::raw("  "),
-                Span::styled(
-                    format!("{} open", open_ports),
-                    Style::default().fg(DIM()),
-                ),
+                Span::styled(format!("{} open", open_ports), Style::default().fg(DIM())),
             ]))
         })
         .collect();
@@ -695,7 +702,10 @@ fn render_host_list(f: &mut Frame, app: &App, area: Rect) {
         .highlight_symbol("▸ ");
 
     let mut state = ListState::default();
-    state.select(Some(app.scan_host_index.min(app.scan_hosts.len().saturating_sub(1))));
+    state.select(Some(
+        app.scan_host_index
+            .min(app.scan_hosts.len().saturating_sub(1)),
+    ));
     f.render_stateful_widget(list, area, &mut state);
 }
 
@@ -751,7 +761,9 @@ fn render_host_detail(f: &mut Frame, app: &App, area: Rect) {
         ))]
     };
 
-    let para = Paragraph::new(lines).block(block).wrap(Wrap { trim: false });
+    let para = Paragraph::new(lines)
+        .block(block)
+        .wrap(Wrap { trim: false });
     f.render_widget(para, area);
 }
 
@@ -823,7 +835,11 @@ fn render_full_diff(f: &mut Frame, diff: &ScanDiff, area: Rect) {
     lines.push(Line::from(vec![
         Span::styled(" prev: ", Style::default().fg(DIM())),
         Span::styled(
-            format!("{}  ({})", &diff.prev_id[..diff.prev_id.len().min(8)], history::format_timestamp(diff.prev_started)),
+            format!(
+                "{}  ({})",
+                &diff.prev_id[..diff.prev_id.len().min(8)],
+                history::format_timestamp(diff.prev_started)
+            ),
             Style::default().fg(TEXT()),
         ),
     ]));
@@ -930,7 +946,9 @@ fn render_full_diff(f: &mut Frame, diff: &ScanDiff, area: Rect) {
         }
     }
 
-    let para = Paragraph::new(lines).block(block).wrap(Wrap { trim: false });
+    let para = Paragraph::new(lines)
+        .block(block)
+        .wrap(Wrap { trim: false });
     f.render_widget(para, area);
 }
 
@@ -982,14 +1000,8 @@ fn render_history_list(f: &mut Frame, app: &App, area: Rect) {
             };
             ListItem::new(Line::from(vec![
                 marker,
-                Span::styled(
-                    s.group_name.clone(),
-                    Style::default().fg(TEXT()).bold(),
-                ),
-                Span::styled(
-                    format!(" · {}", s.profile_name),
-                    Style::default().fg(DIM()),
-                ),
+                Span::styled(s.group_name.clone(), Style::default().fg(TEXT()).bold()),
+                Span::styled(format!(" · {}", s.profile_name), Style::default().fg(DIM())),
                 Span::raw("  "),
                 Span::styled(
                     format!("{}↑", s.hosts_up),
@@ -1084,7 +1096,9 @@ fn render_history_detail(f: &mut Frame, app: &App, area: Rect) {
         Style::default().fg(DIM()),
     )));
 
-    let para = Paragraph::new(lines).block(block).wrap(Wrap { trim: false });
+    let para = Paragraph::new(lines)
+        .block(block)
+        .wrap(Wrap { trim: false });
     f.render_widget(para, area);
 }
 
@@ -1125,7 +1139,11 @@ fn render_status(f: &mut Frame, app: &App, area: Rect) {
             } else if secs_left < 3600 {
                 format!("  [{target}/{profile} in {}m]", secs_left / 60)
             } else {
-                format!("  [{target}/{profile} in {}h {}m]", secs_left / 3600, (secs_left % 3600) / 60)
+                format!(
+                    "  [{target}/{profile} in {}h {}m]",
+                    secs_left / 3600,
+                    (secs_left % 3600) / 60
+                )
             };
             spans.push(Span::styled(label, Style::default().fg(DIM())));
         }
@@ -1146,11 +1164,18 @@ fn render_target_form_overlay(f: &mut Frame, app: &App, area: Rect) {
     let target_lines = app.form.targets.len().max(1) as u16;
     let body_lines: u16 = 1 /*name*/ + 1 /*desc*/ + 1 /*targets label*/ + target_lines + 1 /*blank*/ + 2 /*hints*/;
     let error_bonus: u16 = if app.form.error.is_some() { 2 } else { 0 };
-    let h = (body_lines + error_bonus + 4).min(area.height.saturating_sub(4)).max(12);
+    let h = (body_lines + error_bonus + 4)
+        .min(area.height.saturating_sub(4))
+        .max(12);
     let w = 68.min(area.width.saturating_sub(4));
     let x = area.x + (area.width.saturating_sub(w)) / 2;
     let y = area.y + (area.height.saturating_sub(h)) / 2;
-    let rect = Rect { x, y, width: w, height: h };
+    let rect = Rect {
+        x,
+        y,
+        width: w,
+        height: h,
+    };
 
     f.render_widget(Clear, rect);
 
@@ -1219,7 +1244,9 @@ fn render_target_form_overlay(f: &mut Frame, app: &App, area: Rect) {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(ACCENT()))
         .title(Span::styled(title, Style::default().fg(ACCENT()).bold()));
-    let para = Paragraph::new(lines).block(block).wrap(Wrap { trim: false });
+    let para = Paragraph::new(lines)
+        .block(block)
+        .wrap(Wrap { trim: false });
     f.render_widget(para, rect);
 }
 
@@ -1229,7 +1256,10 @@ fn form_field_line(label: &str, value: &str, focused: bool, _last: bool) -> Line
     let cursor = if focused { "█" } else { "" };
     Line::from(vec![
         Span::styled("  ", Style::default()),
-        Span::styled(format!("{label} {marker} "), Style::default().fg(label_color)),
+        Span::styled(
+            format!("{label} {marker} "),
+            Style::default().fg(label_color),
+        ),
         Span::styled(value.to_string(), Style::default().fg(TEXT())),
         Span::styled(cursor, Style::default().fg(ACCENT()).bold()),
     ])
@@ -1243,14 +1273,23 @@ fn render_profile_form_overlay(f: &mut Frame, app: &App, area: Rect) {
     };
 
     let body_lines: u16 = 1 + 1 + 1 + 1 + 3;
-    let error_bonus: u16 = if app.profile_form.error.is_some() { 2 } else { 0 };
+    let error_bonus: u16 = if app.profile_form.error.is_some() {
+        2
+    } else {
+        0
+    };
     let h = (body_lines + error_bonus + 4)
         .min(area.height.saturating_sub(4))
         .max(12);
     let w = 78.min(area.width.saturating_sub(4));
     let x = area.x + (area.width.saturating_sub(w)) / 2;
     let y = area.y + (area.height.saturating_sub(h)) / 2;
-    let rect = Rect { x, y, width: w, height: h };
+    let rect = Rect {
+        x,
+        y,
+        width: w,
+        height: h,
+    };
 
     f.render_widget(Clear, rect);
 
@@ -1296,7 +1335,9 @@ fn render_profile_form_overlay(f: &mut Frame, app: &App, area: Rect) {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(ACCENT()))
         .title(Span::styled(title, Style::default().fg(ACCENT()).bold()));
-    let para = Paragraph::new(lines).block(block).wrap(Wrap { trim: false });
+    let para = Paragraph::new(lines)
+        .block(block)
+        .wrap(Wrap { trim: false });
     f.render_widget(para, rect);
 }
 
@@ -1306,7 +1347,10 @@ fn profile_field_line(label: &str, value: &str, focused: bool) -> Line<'static> 
     let cursor = if focused { "█" } else { "" };
     Line::from(vec![
         Span::styled("  ", Style::default()),
-        Span::styled(format!("{label} {marker} "), Style::default().fg(label_color)),
+        Span::styled(
+            format!("{label} {marker} "),
+            Style::default().fg(label_color),
+        ),
         Span::styled(value.to_string(), Style::default().fg(TEXT())),
         Span::styled(cursor, Style::default().fg(ACCENT()).bold()),
     ])
@@ -1335,7 +1379,12 @@ fn render_delete_confirm_overlay(f: &mut Frame, app: &App, area: Rect, is_profil
     let h = 9u16.min(area.height.saturating_sub(4));
     let x = area.x + (area.width.saturating_sub(w)) / 2;
     let y = area.y + (area.height.saturating_sub(h)) / 2;
-    let rect = Rect { x, y, width: w, height: h };
+    let rect = Rect {
+        x,
+        y,
+        width: w,
+        height: h,
+    };
     f.render_widget(Clear, rect);
 
     let lines = vec![
@@ -1412,12 +1461,10 @@ fn render_topology_overlay(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(outer, rect);
 
     // Header line
-    let header = Paragraph::new(Line::from(vec![
-        Span::styled(
-            " Scanner (depth 0) on the left, scanned hosts on the right. ",
-            Style::default().fg(DIM()),
-        ),
-    ]));
+    let header = Paragraph::new(Line::from(vec![Span::styled(
+        " Scanner (depth 0) on the left, scanned hosts on the right. ",
+        Style::default().fg(DIM()),
+    )]));
     f.render_widget(header, inset(chunks[0], 1, 1));
 
     if graph.is_empty() {
@@ -1475,10 +1522,7 @@ fn render_topology_overlay(f: &mut Frame, app: &App, area: Rect) {
     let positions_for_canvas = positions.clone();
     let nodes_for_canvas = graph.nodes.clone();
     let canvas = Canvas::default()
-        .block(
-            Block::default()
-                .borders(Borders::NONE)
-        )
+        .block(Block::default().borders(Borders::NONE))
         .marker(Marker::Braille)
         .x_bounds([0.0, 100.0])
         .y_bounds([0.0, 100.0])
@@ -1524,7 +1568,10 @@ fn render_topology_overlay(f: &mut Frame, app: &App, area: Rect) {
         };
         let is_cursor = i == cursor;
         let glyph_style = if is_cursor {
-            Style::default().fg(fg).bg(SELECTION_BG()).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(fg)
+                .bg(SELECTION_BG())
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(fg)
         };
@@ -1561,10 +1608,7 @@ fn render_topology_overlay(f: &mut Frame, app: &App, area: Rect) {
                     width: text_len,
                     height: 1,
                 };
-                f.render_widget(
-                    Paragraph::new(Span::styled(text, label_style)),
-                    label_rect,
-                );
+                f.render_widget(Paragraph::new(Span::styled(text, label_style)), label_rect);
             }
         } else {
             let label_x = col.saturating_add(2);
@@ -1576,10 +1620,7 @@ fn render_topology_overlay(f: &mut Frame, app: &App, area: Rect) {
                     height: 1,
                 };
                 let text = truncate(&node.label, label_rect.width as usize);
-                f.render_widget(
-                    Paragraph::new(Span::styled(text, label_style)),
-                    label_rect,
-                );
+                f.render_widget(Paragraph::new(Span::styled(text, label_style)), label_rect);
             }
         }
     }
@@ -1602,7 +1643,10 @@ fn render_topology_footer(f: &mut Frame, area: Rect, cursor_node: Option<&crate:
             Span::styled(" ▸ ", Style::default().fg(ACCENT())),
             Span::styled(node.label.clone(), Style::default().fg(TEXT()).bold()),
             Span::raw("  "),
-            Span::styled(format!("depth={}  {}", node.depth, kind), Style::default().fg(DIM())),
+            Span::styled(
+                format!("depth={}  {}", node.depth, kind),
+                Style::default().fg(DIM()),
+            ),
         ]));
     } else {
         lines.push(Line::raw(""));

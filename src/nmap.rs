@@ -47,7 +47,10 @@ impl ScanHandle {
         if rc == 0 {
             Ok(())
         } else {
-            Err(anyhow::anyhow!("kill(SIGSTOP) failed: {}", std::io::Error::last_os_error()))
+            Err(anyhow::anyhow!(
+                "kill(SIGSTOP) failed: {}",
+                std::io::Error::last_os_error()
+            ))
         }
     }
 
@@ -58,7 +61,10 @@ impl ScanHandle {
         if rc == 0 {
             Ok(())
         } else {
-            Err(anyhow::anyhow!("kill(SIGCONT) failed: {}", std::io::Error::last_os_error()))
+            Err(anyhow::anyhow!(
+                "kill(SIGCONT) failed: {}",
+                std::io::Error::last_os_error()
+            ))
         }
     }
 
@@ -69,7 +75,9 @@ impl ScanHandle {
 
     #[cfg(not(unix))]
     pub fn resume(&self) -> Result<()> {
-        Err(anyhow::anyhow!("resume is only supported on Unix platforms"))
+        Err(anyhow::anyhow!(
+            "resume is only supported on Unix platforms"
+        ))
     }
 }
 
@@ -142,14 +150,8 @@ pub fn spawn(profile: &Profile, group: &TargetGroup) -> Result<ScanHandle> {
         .spawn()
         .context("failed to spawn nmap")?;
 
-    let stdout = child
-        .stdout
-        .take()
-        .context("nmap stdout pipe missing")?;
-    let stderr = child
-        .stderr
-        .take()
-        .context("nmap stderr pipe missing")?;
+    let stdout = child.stdout.take().context("nmap stdout pipe missing")?;
+    let stderr = child.stderr.take().context("nmap stderr pipe missing")?;
 
     let (tx, rx) = mpsc::channel::<ScanEvent>();
 
@@ -400,8 +402,7 @@ fn parse_stream<R: BufRead>(reader: R, tx: &Sender<ScanEvent>) -> Result<()> {
                     }
                     "hosts" => {
                         if let Some(fs) = runstats_finished.as_mut() {
-                            fs.hosts_up =
-                                attr(&e, "up").and_then(|s| s.parse().ok()).unwrap_or(0);
+                            fs.hosts_up = attr(&e, "up").and_then(|s| s.parse().ok()).unwrap_or(0);
                             fs.hosts_down =
                                 attr(&e, "down").and_then(|s| s.parse().ok()).unwrap_or(0);
                         }
@@ -614,15 +615,16 @@ mod tests {
         assert_eq!(http.service.as_deref(), Some("http"));
 
         assert!(matches!(
-            events.iter().find(|e| matches!(e, ScanEvent::RunFinished { .. })),
+            events
+                .iter()
+                .find(|e| matches!(e, ScanEvent::RunFinished { .. })),
             Some(_)
         ));
     }
 
     #[test]
     fn parses_progress_line_with_eta() {
-        let line =
-            "Connect Scan Timing: About 42.5% done; ETC: 11:45 (0:01:23 remaining)";
+        let line = "Connect Scan Timing: About 42.5% done; ETC: 11:45 (0:01:23 remaining)";
         let ev = parse_stats_line(line).unwrap();
         match ev {
             ScanEvent::Progress { percent, eta_secs } => {
@@ -703,7 +705,10 @@ mod tests {
         // Drain until exit to avoid leaving a zombie around.
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
         while std::time::Instant::now() < deadline {
-            match handle.rx.recv_timeout(std::time::Duration::from_millis(200)) {
+            match handle
+                .rx
+                .recv_timeout(std::time::Duration::from_millis(200))
+            {
                 Ok(ScanEvent::Exited { .. }) => break,
                 Ok(_) => {}
                 Err(_) => {}
@@ -739,7 +744,10 @@ mod tests {
         // Drain for up to 10 seconds.
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         while std::time::Instant::now() < deadline {
-            match handle.rx.recv_timeout(std::time::Duration::from_millis(200)) {
+            match handle
+                .rx
+                .recv_timeout(std::time::Duration::from_millis(200))
+            {
                 Ok(ScanEvent::HostComplete(_)) => saw_host = true,
                 Ok(ScanEvent::RunFinished { .. }) => saw_finished = true,
                 Ok(ScanEvent::Exited { .. }) => break,

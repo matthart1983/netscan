@@ -95,7 +95,10 @@ fn run_daemon(
             let group = targets.iter().find(|g| g.name == req.target_name);
             let profile = profiles.iter().find(|p| p.name == req.profile_name);
             let (Some(group), Some(profile)) = (group, profile) else {
-                eprintln!("  skip: target '{}' or profile '{}' not found", req.target_name, req.profile_name);
+                eprintln!(
+                    "  skip: target '{}' or profile '{}' not found",
+                    req.target_name, req.profile_name
+                );
                 continue;
             };
 
@@ -113,7 +116,11 @@ fn run_daemon(
                     for ev in handle.rx.iter() {
                         match ev {
                             nmap::ScanEvent::HostComplete(h) => hosts.push(h),
-                            nmap::ScanEvent::RunFinished { summary: s, hosts_up: u, hosts_down: d } => {
+                            nmap::ScanEvent::RunFinished {
+                                summary: s,
+                                hosts_up: u,
+                                hosts_down: d,
+                            } => {
                                 summary = s;
                                 hosts_up = u;
                                 hosts_down = d;
@@ -147,13 +154,24 @@ fn run_daemon(
                         if let Err(e) = store.insert_scan(&record) {
                             eprintln!("  history save failed: {e}");
                         }
-                        if let Ok(Some(prev)) = store.previous_scan(&record.group_name, &record.profile_name, record.started_at) {
+                        if let Ok(Some(prev)) = store.previous_scan(
+                            &record.group_name,
+                            &record.profile_name,
+                            record.started_at,
+                        ) {
                             let d = diff::compute(&prev, &record);
                             if !d.host_changes.is_empty() {
-                                eprintln!("  changes detected: {} host(s) changed", d.host_changes.len());
+                                eprintln!(
+                                    "  changes detected: {} host(s) changed",
+                                    d.host_changes.len()
+                                );
                             }
                         }
-                        sched.notify_complete(&record.group_name, &record.profile_name, history::now_secs());
+                        sched.notify_complete(
+                            &record.group_name,
+                            &record.profile_name,
+                            history::now_secs(),
+                        );
                         eprintln!("  done: {summary}");
                     } else {
                         eprintln!("  scan failed");

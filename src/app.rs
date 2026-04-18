@@ -434,7 +434,10 @@ impl App {
         let profile = self.profiles.iter().find(|p| p.name == req.profile_name);
         let (Some(group), Some(profile)) = (group.cloned(), profile.cloned()) else {
             self.toast = Some((
-                format!("schedule skipped: target '{}' or profile '{}' not found", req.target_name, req.profile_name),
+                format!(
+                    "schedule skipped: target '{}' or profile '{}' not found",
+                    req.target_name, req.profile_name
+                ),
                 Instant::now(),
             ));
             return;
@@ -593,9 +596,16 @@ impl App {
         self.history_selected = None;
 
         if self.scan_scheduled {
-            self.scheduler.notify_complete(&record.group_name, &record.profile_name, history::now_secs());
+            self.scheduler.notify_complete(
+                &record.group_name,
+                &record.profile_name,
+                history::now_secs(),
+            );
             self.toast = Some((
-                format!("[scheduled] {}/{} saved to history", record.group_name, record.profile_name),
+                format!(
+                    "[scheduled] {}/{} saved to history",
+                    record.group_name, record.profile_name
+                ),
                 Instant::now(),
             ));
         } else {
@@ -782,17 +792,17 @@ impl App {
         }
         self.history_marked_id = Some(entry.id.clone());
         self.toast = Some((
-            format!("marked {} — select another and press [d] to diff", &entry.id[..entry.id.len().min(8)]),
+            format!(
+                "marked {} — select another and press [d] to diff",
+                &entry.id[..entry.id.len().min(8)]
+            ),
             Instant::now(),
         ));
     }
 
     fn run_marked_diff(&mut self) {
         let Some(marked_id) = self.history_marked_id.clone() else {
-            self.toast = Some((
-                "press [m] to mark a scan first".to_string(),
-                Instant::now(),
-            ));
+            self.toast = Some(("press [m] to mark a scan first".to_string(), Instant::now()));
             return;
         };
         let Some(current) = self.history_selected.as_ref() else {
@@ -842,10 +852,7 @@ impl App {
 
         match export_bundle(&self.paths, &rec, diff_opt.as_ref()) {
             Ok(dir) => {
-                self.toast = Some((
-                    format!("exported → {}", dir.display()),
-                    Instant::now(),
-                ));
+                self.toast = Some((format!("exported → {}", dir.display()), Instant::now()));
             }
             Err(e) => {
                 self.scan_error = Some(format!("export failed: {e}"));
@@ -921,8 +928,10 @@ impl App {
             _ => {}
         }
 
-        let is_profile_form =
-            matches!(self.form_mode, FormMode::AddProfile | FormMode::EditProfile(_));
+        let is_profile_form = matches!(
+            self.form_mode,
+            FormMode::AddProfile | FormMode::EditProfile(_)
+        );
 
         match (key.code, key.modifiers) {
             (KeyCode::Esc, _) => {
@@ -1026,8 +1035,10 @@ impl App {
             .enumerate()
             .any(|(i, p)| p.name == profile.name && Some(i) != edit_idx)
         {
-            self.profile_form.error =
-                Some(format!("a profile named \"{}\" already exists", profile.name));
+            self.profile_form.error = Some(format!(
+                "a profile named \"{}\" already exists",
+                profile.name
+            ));
             return;
         }
 
@@ -1073,10 +1084,7 @@ impl App {
         if let Err(e) = crate::config::save_profiles(&self.paths.profiles_file, &self.profiles) {
             self.scan_error = Some(format!("save failed: {e}"));
         } else {
-            self.toast = Some((
-                format!("deleted \"{}\"", removed.name),
-                Instant::now(),
-            ));
+            self.toast = Some((format!("deleted \"{}\"", removed.name), Instant::now()));
         }
         self.form_mode = FormMode::None;
     }
@@ -1135,11 +1143,13 @@ impl App {
         } else {
             None
         };
-        if self.targets.iter().enumerate().any(|(i, g)| {
-            g.name == group.name && Some(i) != edit_idx
-        }) {
-            self.form.error =
-                Some(format!("a group named \"{}\" already exists", group.name));
+        if self
+            .targets
+            .iter()
+            .enumerate()
+            .any(|(i, g)| g.name == group.name && Some(i) != edit_idx)
+        {
+            self.form.error = Some(format!("a group named \"{}\" already exists", group.name));
             return;
         }
 
@@ -1185,10 +1195,7 @@ impl App {
         if let Err(e) = crate::config::save_targets(&self.paths.targets_file, &self.targets) {
             self.scan_error = Some(format!("save failed: {e}"));
         } else {
-            self.toast = Some((
-                format!("deleted \"{}\"", removed.name),
-                Instant::now(),
-            ));
+            self.toast = Some((format!("deleted \"{}\"", removed.name), Instant::now()));
         }
         self.form_mode = FormMode::None;
     }
@@ -1303,10 +1310,7 @@ impl App {
 
     fn queue_ssh_for_host(&mut self, host: &Host) {
         if !matches!(host.status, crate::types::HostStatus::Up) {
-            self.toast = Some((
-                format!("host {} is not up", host.address),
-                Instant::now(),
-            ));
+            self.toast = Some((format!("host {} is not up", host.address), Instant::now()));
             return;
         }
         let target = host
@@ -1316,12 +1320,16 @@ impl App {
             .unwrap_or_else(|| host.address.clone());
         // Soft warning if no ssh port was observed; still let it through so users
         // can ssh to hosts scanned with a profile that didn't probe port 22.
-        let has_ssh_open = host.ports.iter().any(|p| {
-            p.port == 22 && matches!(p.state, crate::types::PortState::Open)
-        });
+        let has_ssh_open = host
+            .ports
+            .iter()
+            .any(|p| p.port == 22 && matches!(p.state, crate::types::PortState::Open));
         if !has_ssh_open && !host.ports.is_empty() {
             self.toast = Some((
-                format!("ssh: port 22 not observed open on {} — trying anyway", target),
+                format!(
+                    "ssh: port 22 not observed open on {} — trying anyway",
+                    target
+                ),
                 Instant::now(),
             ));
         }
@@ -1374,7 +1382,10 @@ impl App {
         let graph = topology::build_graph(self.topology_hosts());
         let len = graph.nodes.len();
         if len == 0 {
-            if matches!(key.code, KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('T')) {
+            if matches!(
+                key.code,
+                KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('T')
+            ) {
                 self.close_topology();
             }
             return;
@@ -1410,13 +1421,10 @@ impl App {
                     {
                         // Clone the host because topology_hosts() borrows self,
                         // and queue_ssh_for_host needs &mut self.
-                        let host = self
-                            .topology_hosts()
-                            .get(scan_host_index)
-                            .cloned();
+                        let host = self.topology_hosts().get(scan_host_index).cloned();
                         if matches!(self.topology_source, TopologySource::Scan) {
-                            self.scan_host_index = scan_host_index
-                                .min(self.scan_hosts.len().saturating_sub(1));
+                            self.scan_host_index =
+                                scan_host_index.min(self.scan_hosts.len().saturating_sub(1));
                         }
                         self.close_topology();
                         if let Some(host) = host {
@@ -1480,10 +1488,7 @@ impl App {
         };
         match export_bundle(&self.paths, &rec, self.last_diff.as_ref()) {
             Ok(dir) => {
-                self.toast = Some((
-                    format!("exported → {}", dir.display()),
-                    Instant::now(),
-                ));
+                self.toast = Some((format!("exported → {}", dir.display()), Instant::now()));
             }
             Err(e) => {
                 self.scan_error = Some(format!("export failed: {e}"));
@@ -1566,9 +1571,7 @@ impl App {
 
     #[allow(dead_code)]
     pub fn history_detail_host(&self) -> Option<&Host> {
-        self.history_selected
-            .as_ref()
-            .and_then(|r| r.hosts.first())
+        self.history_selected.as_ref().and_then(|r| r.hosts.first())
     }
 }
 
@@ -1613,11 +1616,7 @@ fn effective_ssh_user() -> Option<String> {
     Some(sudo_user)
 }
 
-fn run_ssh_interactive(
-    terminal: &mut Tui,
-    target: &str,
-    ssh: &crate::config::SshConfig,
-) -> String {
+fn run_ssh_interactive(terminal: &mut Tui, target: &str, ssh: &crate::config::SshConfig) -> String {
     use crossterm::execute;
     use crossterm::terminal::{
         disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
@@ -1655,7 +1654,9 @@ fn run_ssh_interactive(
         Ok(s) => format!(
             "ssh {} exited with code {}",
             destination,
-            s.code().map(|c| c.to_string()).unwrap_or_else(|| "?".to_string())
+            s.code()
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| "?".to_string())
         ),
         Err(e) => format!("ssh failed: {e}"),
     }
@@ -1742,16 +1743,8 @@ fn export_bundle(
     let mut summary = String::new();
     let _ = writeln!(summary, "# netscan scan {}", rec.id);
     let _ = writeln!(summary);
-    let _ = writeln!(
-        summary,
-        "- **Group:** `{}`",
-        rec.group_name
-    );
-    let _ = writeln!(
-        summary,
-        "- **Profile:** `{}`",
-        rec.profile_name
-    );
+    let _ = writeln!(summary, "- **Group:** `{}`", rec.group_name);
+    let _ = writeln!(summary, "- **Profile:** `{}`", rec.profile_name);
     let _ = writeln!(summary, "- **Command:** `{}`", rec.command);
     let _ = writeln!(
         summary,

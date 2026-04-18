@@ -81,7 +81,15 @@ pub fn build_graph(hosts: &[Host]) -> Graph {
 
         if host.hops.is_empty() {
             // Flat: scanner → host at depth 1.
-            let idx = upsert_host(&mut g, &mut indices, &host_id, label, 1, host.status, scan_idx);
+            let idx = upsert_host(
+                &mut g,
+                &mut indices,
+                &host_id,
+                label,
+                1,
+                host.status,
+                scan_idx,
+            );
             let to_id = g.nodes[idx].id.clone();
             push_edge(&mut g, SCANNER_ID, &to_id);
             continue;

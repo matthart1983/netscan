@@ -190,10 +190,9 @@ extra_args = []
         fs::write(path, text)?;
         return Ok(default);
     }
-    let text = fs::read_to_string(path)
-        .with_context(|| format!("reading {}", path.display()))?;
-    let cfg: AppConfig = toml::from_str(&text)
-        .with_context(|| format!("parsing {}", path.display()))?;
+    let text = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    let cfg: AppConfig =
+        toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
     Ok(cfg)
 }
 
@@ -243,10 +242,9 @@ pub fn load_targets(path: &std::path::Path) -> Result<Vec<TargetGroup>> {
         fs::write(path, toml::to_string_pretty(&file)?)?;
         return Ok(defaults);
     }
-    let text = fs::read_to_string(path)
-        .with_context(|| format!("reading {}", path.display()))?;
-    let file: TargetsFile = toml::from_str(&text)
-        .with_context(|| format!("parsing {}", path.display()))?;
+    let text = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    let file: TargetsFile =
+        toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
     Ok(file.groups)
 }
 
@@ -257,8 +255,7 @@ pub fn save_targets(path: &std::path::Path, groups: &[TargetGroup]) -> Result<()
     let file = TargetsFile {
         groups: groups.to_vec(),
     };
-    let text = toml::to_string_pretty(&file)
-        .context("serializing targets.toml")?;
+    let text = toml::to_string_pretty(&file).context("serializing targets.toml")?;
     // Write atomically via a temp file in the same directory, then rename.
     let tmp = path.with_extension("toml.tmp");
     fs::write(&tmp, text).with_context(|| format!("writing {}", tmp.display()))?;
@@ -276,10 +273,9 @@ pub fn load_profiles(path: &std::path::Path) -> Result<Vec<Profile>> {
         fs::write(path, toml::to_string_pretty(&file)?)?;
         return Ok(defaults);
     }
-    let text = fs::read_to_string(path)
-        .with_context(|| format!("reading {}", path.display()))?;
-    let file: ProfilesFile = toml::from_str(&text)
-        .with_context(|| format!("parsing {}", path.display()))?;
+    let text = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    let file: ProfilesFile =
+        toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
     Ok(file.profiles)
 }
 

@@ -59,9 +59,7 @@ pub fn spawn_summary(
                         .trim()
                         .to_string();
                     if text.is_empty() {
-                        let _ = tx.send(AiResult::Err(
-                            "empty response from Ollama".to_string(),
-                        ));
+                        let _ = tx.send(AiResult::Err("empty response from Ollama".to_string()));
                     } else {
                         let _ = tx.send(AiResult::Ok(text));
                     }
@@ -73,9 +71,7 @@ pub fn spawn_summary(
             Err(ureq::Error::Status(code, resp)) => {
                 let body = resp.into_string().unwrap_or_default();
                 let snippet: String = body.chars().take(160).collect();
-                let _ = tx.send(AiResult::Err(format!(
-                    "HTTP {code}: {snippet}"
-                )));
+                let _ = tx.send(AiResult::Err(format!("HTTP {code}: {snippet}")));
             }
             Err(e) => {
                 let _ = tx.send(AiResult::Err(format!("request: {e}")));
