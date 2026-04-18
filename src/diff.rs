@@ -446,6 +446,7 @@ mod tests {
             status,
             ports,
             os_guess: None,
+            hops: Vec::new(),
         }
     }
 

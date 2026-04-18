@@ -264,6 +264,7 @@ impl Store {
                     status: status_from_str(&row.get::<_, String>(2)?),
                     os_guess: row.get(3)?,
                     ports: Vec::new(),
+                    hops: Vec::new(),
                 })
             })?;
             let mut out = Vec::new();
@@ -506,6 +507,7 @@ mod tests {
                     version: Some("9.3".to_string()),
                     scripts: vec![],
                 }],
+                hops: vec![],
             }],
         }
     }

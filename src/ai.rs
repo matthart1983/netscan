@@ -223,6 +223,10 @@ pub fn build_prompt(record: &ScanRecord, diff: Option<&ScanDiff>) -> String {
         s,
         "Be concise and direct. No preamble, no apologies, no \"As an AI\". Use plain bullets (\"- ...\"). Stop after the last bullet."
     );
+    let _ = writeln!(
+        s,
+        "If suggesting an ssh command, do NOT use `root` as the login user — modern distributions disable root ssh by default. Either omit the user (e.g. `ssh 192.0.2.1`) or pick a plausible non-root name like `admin`, `ubuntu`, `pi`, or `ec2-user` based on the context."
+    );
 
     s
 }
@@ -293,6 +297,7 @@ mod tests {
                     version: None,
                     scripts: vec![],
                 }],
+                hops: vec![],
             }],
         };
         let cfg = AiConfig {
@@ -343,6 +348,7 @@ mod tests {
                     version: Some("9.3".into()),
                     scripts: vec![],
                 }],
+                hops: vec![],
             }],
         };
         let p = build_prompt(&rec, None);

@@ -9,42 +9,30 @@ Set TypingSpeed 25ms
 Set Framerate 18
 Set Padding 10
 
-# Isolate netscan's config/data to a throwaway HOME so the demo is
-# deterministic and doesn't touch the user's real history.
+# Seed a throwaway HOME with a sample scan so History and Topology have data
+# without needing a live network. demo-seed.sh creates targets.toml and
+# populates history.db with a 5-host demo-lan scan.
 Hide
-Type "bash -lc 'export HOME=/tmp/netscan-demo-home && rm -rf $HOME && mkdir -p $HOME && /Users/matt/projects/netscan/target/release/netscan'"
+Type `bash -lc 'HOME_DEMO=/tmp/netscan-demo-home /Users/matt/projects/netscan/demo-seed.sh && HOME=/tmp/netscan-demo-home /Users/matt/projects/netscan/target/release/netscan'`
 Enter
-Sleep 2500ms
+Sleep 2000ms
 Show
 
-# Landing on the Targets tab with two default groups (localhost, home-lan).
-# The first one (localhost) is selected.
-Sleep 1500ms
+# Land on Targets. Tab through all four tabs to showcase the UI.
+Sleep 1200ms
+Tab
+Sleep 900ms
+Tab
+Sleep 900ms
+Tab
+Sleep 1200ms
 
-# Start the first scan — shows the live progress bar + streaming hosts.
-Enter
-Sleep 4s
+# Landed on History — the seeded scan is selected. Open its topology.
+Type "T"
+Sleep 3500ms
 
-# Rerun the same scan to show the auto-diff pane appearing below the host list.
-Enter
-Sleep 4s
-
-# Cycle the theme three times so viewers see the palette options.
-Type "t"
-Sleep 800ms
-Type "t"
-Sleep 800ms
-Type "t"
-Sleep 800ms
-Type "t"
-Sleep 800ms
-Type "t"
-Sleep 800ms
-
-# Switch to the History tab to show the persisted scan list.
-Type "4"
-Sleep 2500ms
-
-# Quit cleanly.
+# Close and quit.
+Escape
+Sleep 300ms
 Type "q"
-Sleep 500ms
+Sleep 400ms

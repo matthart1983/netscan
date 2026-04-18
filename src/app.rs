@@ -48,6 +48,14 @@ pub enum AiState {
     Failed(String),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TopologySource {
+    /// Topology reflects the live/last scan result (`App::scan_hosts`).
+    Scan,
+    /// Topology reflects the scan record loaded from history (`App::history_selected`).
+    History,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FormMode {
     None,
@@ -275,9 +283,17 @@ pub struct App {
     // Active theme
     pub theme: crate::theme::Theme,
 
+    // Topology overlay state
+    pub topology_open: bool,
+    pub topology_cursor: usize,
+    pub topology_source: TopologySource,
+
+    // Pending side-effects processed by the run loop (outside raw-mode draw).
+    pub pending_ssh: Option<String>,
+
     store: Store,
     paths: Paths,
-    config: AppConfig,
+    pub config: AppConfig,
     handle: Option<ScanHandle>,
     last_tick: Instant,
     pub show_help: bool,
@@ -334,6 +350,10 @@ impl App {
             form: TargetForm::empty(),
             profile_form: ProfileForm::empty(),
             theme: crate::theme::by_name(&config.ui.theme),
+            topology_open: false,
+            topology_cursor: 0,
+            topology_source: TopologySource::Scan,
+            pending_ssh: None,
             store,
             paths,
             config,
@@ -368,6 +388,12 @@ impl App {
 
             if self.last_tick.elapsed() >= tick_rate {
                 self.tick();
+                self.last_tick = Instant::now();
+            }
+
+            if let Some(target) = self.pending_ssh.take() {
+                let outcome = run_ssh_interactive(terminal, &target, &self.config.ssh);
+                self.toast = Some((outcome, Instant::now()));
                 self.last_tick = Instant::now();
             }
         }
@@ -617,6 +643,15 @@ impl App {
             return;
         }
 
+        if self.topology_open {
+            if let (KeyCode::Char('c'), KeyModifiers::CONTROL) = (key.code, key.modifiers) {
+                self.should_quit = true;
+                return;
+            }
+            self.on_key_topology(key);
+            return;
+        }
+
         // Form overlays intercept everything except Ctrl+C.
         if !matches!(self.form_mode, FormMode::None) {
             if let (KeyCode::Char('c'), KeyModifiers::CONTROL) = (key.code, key.modifiers) {
@@ -728,6 +763,9 @@ impl App {
             }
             KeyCode::Char('d') | KeyCode::Char('D') => {
                 self.run_marked_diff();
+            }
+            KeyCode::Char('T') => {
+                self.open_topology_from_history();
             }
             _ => {}
         }
@@ -1245,6 +1283,148 @@ impl App {
                     self.export_last_scan();
                 }
             }
+            KeyCode::Char('s') => {
+                self.queue_ssh();
+            }
+            KeyCode::Char('T') => {
+                self.open_topology();
+            }
+            _ => {}
+        }
+    }
+
+    fn queue_ssh(&mut self) {
+        let Some(host) = self.current_host().cloned() else {
+            self.toast = Some(("no host selected".to_string(), Instant::now()));
+            return;
+        };
+        self.queue_ssh_for_host(&host);
+    }
+
+    fn queue_ssh_for_host(&mut self, host: &Host) {
+        if !matches!(host.status, crate::types::HostStatus::Up) {
+            self.toast = Some((
+                format!("host {} is not up", host.address),
+                Instant::now(),
+            ));
+            return;
+        }
+        let target = host
+            .hostname
+            .clone()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| host.address.clone());
+        // Soft warning if no ssh port was observed; still let it through so users
+        // can ssh to hosts scanned with a profile that didn't probe port 22.
+        let has_ssh_open = host.ports.iter().any(|p| {
+            p.port == 22 && matches!(p.state, crate::types::PortState::Open)
+        });
+        if !has_ssh_open && !host.ports.is_empty() {
+            self.toast = Some((
+                format!("ssh: port 22 not observed open on {} — trying anyway", target),
+                Instant::now(),
+            ));
+        }
+        self.pending_ssh = Some(target);
+    }
+
+    pub fn open_topology(&mut self) {
+        self.topology_source = TopologySource::Scan;
+        self.topology_open = true;
+        self.topology_cursor = 0;
+    }
+
+    pub fn open_topology_from_history(&mut self) {
+        if self
+            .history_selected
+            .as_ref()
+            .map(|r| r.hosts.is_empty())
+            .unwrap_or(true)
+        {
+            self.toast = Some((
+                "no scan selected — pick one in history first".to_string(),
+                Instant::now(),
+            ));
+            return;
+        }
+        self.topology_source = TopologySource::History;
+        self.topology_open = true;
+        self.topology_cursor = 0;
+    }
+
+    pub fn close_topology(&mut self) {
+        self.topology_open = false;
+    }
+
+    /// Hosts the topology overlay should graph, based on the active source.
+    pub fn topology_hosts(&self) -> &[crate::types::Host] {
+        match self.topology_source {
+            TopologySource::Scan => &self.scan_hosts,
+            TopologySource::History => self
+                .history_selected
+                .as_ref()
+                .map(|r| r.hosts.as_slice())
+                .unwrap_or(&[]),
+        }
+    }
+
+    fn on_key_topology(&mut self, key: KeyEvent) {
+        use crate::topology;
+        // Rebuild graph every keystroke so cursor stays in sync with the source.
+        let graph = topology::build_graph(self.topology_hosts());
+        let len = graph.nodes.len();
+        if len == 0 {
+            if matches!(key.code, KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('T')) {
+                self.close_topology();
+            }
+            return;
+        }
+        if self.topology_cursor >= len {
+            self.topology_cursor = len - 1;
+        }
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('T') => {
+                self.close_topology();
+            }
+            KeyCode::Right | KeyCode::Char('l') | KeyCode::Tab => {
+                self.topology_cursor = (self.topology_cursor + 1) % len;
+            }
+            KeyCode::Left | KeyCode::Char('h') | KeyCode::BackTab => {
+                self.topology_cursor = if self.topology_cursor == 0 {
+                    len - 1
+                } else {
+                    self.topology_cursor - 1
+                };
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.topology_cursor = jump_in_layer(&graph, self.topology_cursor, 1);
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.topology_cursor = jump_in_layer(&graph, self.topology_cursor, -1);
+            }
+            KeyCode::Enter => {
+                if let Some(node) = graph.nodes.get(self.topology_cursor) {
+                    if let topology::NodeKind::Scanned {
+                        scan_host_index, ..
+                    } = node.kind
+                    {
+                        // Clone the host because topology_hosts() borrows self,
+                        // and queue_ssh_for_host needs &mut self.
+                        let host = self
+                            .topology_hosts()
+                            .get(scan_host_index)
+                            .cloned();
+                        if matches!(self.topology_source, TopologySource::Scan) {
+                            self.scan_host_index = scan_host_index
+                                .min(self.scan_hosts.len().saturating_sub(1));
+                        }
+                        self.close_topology();
+                        if let Some(host) = host {
+                            self.queue_ssh_for_host(&host);
+                        }
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -1389,6 +1569,95 @@ impl App {
         self.history_selected
             .as_ref()
             .and_then(|r| r.hosts.first())
+    }
+}
+
+fn jump_in_layer(graph: &crate::topology::Graph, cursor: usize, delta: i32) -> usize {
+    let Some(cur_node) = graph.nodes.get(cursor) else {
+        return cursor;
+    };
+    let depth = cur_node.depth;
+    let layer_idx = graph
+        .layers
+        .iter()
+        .position(|l| l.iter().any(|&i| i == cursor));
+    let Some(li) = layer_idx else {
+        return cursor;
+    };
+    let layer = &graph.layers[li];
+    let pos_in_layer = layer.iter().position(|&i| i == cursor).unwrap_or(0);
+    let len = layer.len() as i32;
+    if len == 0 {
+        return cursor;
+    }
+    let new_pos = ((pos_in_layer as i32 + delta).rem_euclid(len)) as usize;
+    let _ = depth;
+    layer[new_pos]
+}
+
+/// Pick a sensible non-root user when ssh.user isn't explicitly configured.
+///
+/// netscan is commonly launched under `sudo` so nmap can use `--traceroute`.
+/// In that case `$USER` is `root` and ssh would default to logging in as root
+/// — modern sshd setups typically refuse that. When `SUDO_USER` is present,
+/// use the original caller's login; otherwise let ssh pick (returns None).
+fn effective_ssh_user() -> Option<String> {
+    let current = std::env::var("USER").ok();
+    if current.as_deref() != Some("root") {
+        return None;
+    }
+    let sudo_user = std::env::var("SUDO_USER").ok()?;
+    if sudo_user.is_empty() || sudo_user == "root" {
+        return None;
+    }
+    Some(sudo_user)
+}
+
+fn run_ssh_interactive(
+    terminal: &mut Tui,
+    target: &str,
+    ssh: &crate::config::SshConfig,
+) -> String {
+    use crossterm::execute;
+    use crossterm::terminal::{
+        disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+    };
+
+    // Suspend TUI: raw off, leave alt screen so ssh sees a normal terminal.
+    let _ = disable_raw_mode();
+    let _ = execute!(terminal.backend_mut(), LeaveAlternateScreen);
+
+    let mut cmd = std::process::Command::new("ssh");
+    for a in &ssh.extra_args {
+        cmd.arg(a);
+    }
+    if ssh.port > 0 {
+        cmd.arg("-p").arg(ssh.port.to_string());
+    }
+    let destination = if !ssh.user.trim().is_empty() {
+        format!("{}@{}", ssh.user.trim(), target)
+    } else if let Some(user) = effective_ssh_user() {
+        format!("{}@{}", user, target)
+    } else {
+        target.to_string()
+    };
+    cmd.arg(&destination);
+    println!("\nnetscan: launching ssh {}\n", destination);
+    let status = cmd.status();
+
+    // Restore TUI.
+    let _ = enable_raw_mode();
+    let _ = execute!(terminal.backend_mut(), EnterAlternateScreen);
+    let _ = terminal.clear();
+
+    match status {
+        Ok(s) if s.success() => format!("ssh {} exited cleanly", destination),
+        Ok(s) => format!(
+            "ssh {} exited with code {}",
+            destination,
+            s.code().map(|c| c.to_string()).unwrap_or_else(|| "?".to_string())
+        ),
+        Err(e) => format!("ssh failed: {e}"),
     }
 }
 

@@ -1,6 +1,6 @@
 [package]
 name = "netscan"
-version = "0.1.0"
+version = "0.8.0"
 edition = "2021"
 description = "Continuous attack surface monitor — a TUI workflow for nmap with scan history, live streaming, and differential scanning"
 license = "MIT"

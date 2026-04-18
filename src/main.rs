@@ -6,6 +6,7 @@ mod history;
 mod nmap;
 mod scheduler;
 mod theme;
+mod topology;
 mod types;
 mod ui;
 

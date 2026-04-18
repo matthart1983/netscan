@@ -1,4 +1,4 @@
-use crate::types::{Host, HostStatus, Port, PortState, Profile, ScriptOutput, TargetGroup};
+use crate::types::{Hop, Host, HostStatus, Port, PortState, Profile, ScriptOutput, TargetGroup};
 use anyhow::{Context, Result};
 use quick_xml::events::Event;
 use quick_xml::Reader;
@@ -76,7 +76,18 @@ impl ScanHandle {
 pub fn build_command(profile: &Profile, group: &TargetGroup) -> Vec<String> {
     // Always ask nmap for per-second progress updates on stderr.
     let mut args: Vec<String> = vec!["--stats-every".to_string(), "1s".to_string()];
-    args.extend(shell_split(&profile.flags));
+    let user_args = shell_split(&profile.flags);
+    let has_traceroute = user_args.iter().any(|a| a == "--traceroute");
+    let is_ping_only = user_args.iter().any(|a| a == "-sn");
+    args.extend(user_args);
+    // Traceroute feeds the topology view. nmap's --traceroute uses raw sockets
+    // and requires root — without it nmap aborts the whole scan ("Traceroute
+    // has to be run as root"). Only add the flag when we're actually root, so
+    // non-privileged scans keep working (just without traceroute hops).
+    // Skip for ping-only scans where it produces no useful trace.
+    if !has_traceroute && !is_ping_only && is_root() {
+        args.push("--traceroute".to_string());
+    }
     // Always request XML on stdout.
     args.push("-oX".to_string());
     args.push("-".to_string());
@@ -85,6 +96,16 @@ pub fn build_command(profile: &Profile, group: &TargetGroup) -> Vec<String> {
         args.push(t.clone());
     }
     args
+}
+
+#[cfg(unix)]
+fn is_root() -> bool {
+    unsafe { libc::geteuid() == 0 }
+}
+
+#[cfg(not(unix))]
+fn is_root() -> bool {
+    false
 }
 
 /// Very small shell-ish split. Handles quoted args; no escaping beyond that.
@@ -295,6 +316,13 @@ fn parse_stream<R: BufRead>(reader: R, tx: &Sender<ScanEvent>) -> Result<()> {
                             }
                         }
                     }
+                    "hop" => {
+                        if let Some(h) = current.as_mut() {
+                            if let Some(hop) = parse_hop(&e) {
+                                h.hops.push(hop);
+                            }
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -353,6 +381,13 @@ fn parse_stream<R: BufRead>(reader: R, tx: &Sender<ScanEvent>) -> Result<()> {
                         if let Some(h) = current.as_mut() {
                             if h.os_guess.is_none() {
                                 h.os_guess = attr(&e, "name");
+                            }
+                        }
+                    }
+                    "hop" => {
+                        if let Some(h) = current.as_mut() {
+                            if let Some(hop) = parse_hop(&e) {
+                                h.hops.push(hop);
                             }
                         }
                     }
@@ -444,6 +479,19 @@ fn status_from(s: &str) -> HostStatus {
     }
 }
 
+fn parse_hop(e: &quick_xml::events::BytesStart) -> Option<Hop> {
+    let ttl: u8 = attr(e, "ttl").and_then(|s| s.parse().ok())?;
+    let ipaddr = attr(e, "ipaddr")?;
+    let host_name = attr(e, "host").filter(|s| !s.is_empty());
+    let rtt_ms = attr(e, "rtt").and_then(|s| s.parse::<f32>().ok());
+    Some(Hop {
+        ttl,
+        ipaddr,
+        host: host_name,
+        rtt_ms,
+    })
+}
+
 #[derive(Default)]
 struct HostBuilder {
     address: Option<String>,
@@ -451,16 +499,20 @@ struct HostBuilder {
     status: Option<HostStatus>,
     os_guess: Option<String>,
     ports: Vec<Port>,
+    hops: Vec<Hop>,
 }
 
 impl HostBuilder {
     fn finish(self) -> Host {
+        let mut hops = self.hops;
+        hops.sort_by_key(|h| h.ttl);
         Host {
             address: self.address.unwrap_or_else(|| "unknown".to_string()),
             hostname: self.hostname,
             status: self.status.unwrap_or(HostStatus::Unknown),
             os_guess: self.os_guess,
             ports: self.ports,
+            hops,
         }
     }
 }

@@ -9,7 +9,9 @@ use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 #[allow(unused_imports)]
 use ratatui::style::Stylize;
+use ratatui::symbols::Marker;
 use ratatui::text::{Line, Span};
+use ratatui::widgets::canvas::{Canvas, Line as CanvasLine};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Tabs, Wrap};
 use ratatui::Frame;
 
@@ -75,6 +77,10 @@ pub fn render(f: &mut Frame, app: &App) {
         FormMode::DeleteProfileConfirm(_) => {
             render_delete_confirm_overlay(f, app, area, true)
         }
+    }
+
+    if app.topology_open {
+        render_topology_overlay(f, app, area);
     }
 
     if app.show_help {
@@ -1086,8 +1092,8 @@ fn render_status(f: &mut Frame, app: &App, area: Rect) {
     let hint = match app.tab {
         Tab::Targets => " [↑↓/jk] nav   [Enter] run scan   [a]dd   [e]dit   [d]elete   [t] theme   [?] help ",
         Tab::Profiles => " [↑↓/jk] nav   [Enter] run scan   [a]dd   [e]dit   [d]elete   [t] theme   [?] help ",
-        Tab::Scan => " [↑↓/jk] hosts   [p]ause   [x] stop   [Enter] rerun   [Shift+E] export ",
-        Tab::History => " [↑↓/jk] navigate   [m] mark   [d] diff marked↔current   [e] export   [r] reload   [Esc] clear ",
+        Tab::Scan => " [↑↓/jk] hosts   [p]ause   [x] stop   [Enter] rerun   [Shift+E] export   [Shift+T] topology ",
+        Tab::History => " [↑↓/jk] nav   [m] mark   [d] diff   [Shift+T] topology   [e] export   [r] reload   [Esc] clear ",
     };
     let mut spans: Vec<Span> = vec![Span::styled(hint, Style::default().fg(DIM()))];
 
@@ -1360,9 +1366,279 @@ fn render_delete_confirm_overlay(f: &mut Frame, app: &App, area: Rect, is_profil
     f.render_widget(para, rect);
 }
 
+fn render_topology_overlay(f: &mut Frame, app: &App, area: Rect) {
+    use crate::topology::{self, NodeKind};
+
+    // Nearly full-screen modal with a small margin.
+    let margin_x = (area.width / 20).max(2);
+    let margin_y = (area.height / 10).max(1);
+    let rect = Rect {
+        x: area.x + margin_x,
+        y: area.y + margin_y,
+        width: area.width.saturating_sub(margin_x * 2),
+        height: area.height.saturating_sub(margin_y * 2),
+    };
+    f.render_widget(Clear, rect);
+
+    let graph = topology::build_graph(app.topology_hosts());
+
+    // Split: header (2), canvas (flex), footer (3 — status + keys)
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(2),
+            Constraint::Min(3),
+            Constraint::Length(3),
+        ])
+        .split(rect);
+
+    // Outer border + title
+    let outer = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(ACCENT()))
+        .title(Line::from(vec![
+            Span::styled(" Network Topology ", Style::default().fg(ACCENT()).bold()),
+            Span::styled(
+                format!(
+                    "({} node{}, {} edge{})",
+                    graph.nodes.len(),
+                    if graph.nodes.len() == 1 { "" } else { "s" },
+                    graph.edges.len(),
+                    if graph.edges.len() == 1 { "" } else { "s" },
+                ),
+                Style::default().fg(DIM()),
+            ),
+        ]));
+    f.render_widget(outer, rect);
+
+    // Header line
+    let header = Paragraph::new(Line::from(vec![
+        Span::styled(
+            " Scanner (depth 0) on the left, scanned hosts on the right. ",
+            Style::default().fg(DIM()),
+        ),
+    ]));
+    f.render_widget(header, inset(chunks[0], 1, 1));
+
+    if graph.is_empty() {
+        let msg = Paragraph::new(vec![
+            Line::raw(""),
+            Line::from(Span::styled(
+                "  No scan data yet. Run a scan first, then press T to revisit.",
+                Style::default().fg(DIM()),
+            )),
+        ]);
+        f.render_widget(msg, inset(chunks[1], 2, 1));
+        render_topology_footer(f, chunks[2], None);
+        return;
+    }
+
+    // Compute integer cell layout: depth → x cell, node-within-layer → y cell.
+    let layers = &graph.layers;
+    let num_layers = layers.len().max(1);
+    let max_rows = layers.iter().map(|l| l.len()).max().unwrap_or(1).max(1);
+    // node index → layer index, so we can right-align labels on the last layer
+    // where there's no room to the right of the glyph for a hostname.
+    let mut node_layer: Vec<usize> = vec![0; graph.nodes.len()];
+    for (li, layer) in layers.iter().enumerate() {
+        for &ni in layer {
+            node_layer[ni] = li;
+        }
+    }
+    let last_layer = num_layers.saturating_sub(1);
+
+    let canvas_area = inset(chunks[1], 1, 0);
+    // Map canvas to 0..=100 x 0..=100 coords.
+    let cursor = app.topology_cursor.min(graph.nodes.len() - 1);
+
+    // Precompute (x, y) for every node in [0,100] coords.
+    let mut positions: Vec<(f64, f64)> = vec![(0.0, 0.0); graph.nodes.len()];
+    for (li, layer) in layers.iter().enumerate() {
+        let x = if num_layers == 1 {
+            50.0
+        } else {
+            6.0 + (li as f64) * (88.0 / (num_layers as f64 - 1.0).max(1.0))
+        };
+        let rows = layer.len().max(1);
+        for (ri, &ni) in layer.iter().enumerate() {
+            let y = if rows == 1 {
+                50.0
+            } else {
+                // Top (100) → high y; bottom (0) → low y. Use top-down.
+                90.0 - (ri as f64) * (80.0 / (rows as f64 - 1.0).max(1.0))
+            };
+            positions[ni] = (x, y);
+        }
+    }
+
+    let edges = graph.edges.clone();
+    let positions_for_canvas = positions.clone();
+    let nodes_for_canvas = graph.nodes.clone();
+    let canvas = Canvas::default()
+        .block(
+            Block::default()
+                .borders(Borders::NONE)
+        )
+        .marker(Marker::Braille)
+        .x_bounds([0.0, 100.0])
+        .y_bounds([0.0, 100.0])
+        .paint(move |ctx| {
+            for e in &edges {
+                let from_idx = nodes_for_canvas.iter().position(|n| n.id == e.from);
+                let to_idx = nodes_for_canvas.iter().position(|n| n.id == e.to);
+                if let (Some(a), Some(b)) = (from_idx, to_idx) {
+                    let (x1, y1) = positions_for_canvas[a];
+                    let (x2, y2) = positions_for_canvas[b];
+                    ctx.draw(&CanvasLine {
+                        x1,
+                        y1,
+                        x2,
+                        y2,
+                        color: DIM(),
+                    });
+                }
+            }
+        });
+    f.render_widget(canvas, canvas_area);
+
+    // Overlay node labels as Paragraphs at computed cell positions.
+    let w = canvas_area.width as f64;
+    let h = canvas_area.height as f64;
+    for (i, node) in graph.nodes.iter().enumerate() {
+        let (nx, ny) = positions[i];
+        let col = canvas_area.x + (nx / 100.0 * (w - 1.0)).round() as u16;
+        // Flip y: canvas y=100 at top → row offset 0.
+        let row = canvas_area.y + ((100.0 - ny) / 100.0 * (h - 1.0)).round() as u16;
+        let (glyph, fg) = match node.kind {
+            NodeKind::Scanner => ("◆", ACCENT()),
+            NodeKind::Hop => ("◇", WARN()),
+            NodeKind::Scanned {
+                status: crate::types::HostStatus::Up,
+                ..
+            } => ("●", OK()),
+            NodeKind::Scanned {
+                status: crate::types::HostStatus::Down,
+                ..
+            } => ("●", DANGER()),
+            NodeKind::Scanned { .. } => ("●", DIM()),
+        };
+        let is_cursor = i == cursor;
+        let glyph_style = if is_cursor {
+            Style::default().fg(fg).bg(SELECTION_BG()).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(fg)
+        };
+        // Glyph cell
+        let glyph_rect = Rect {
+            x: col,
+            y: row,
+            width: 1.min(canvas_area.width),
+            height: 1,
+        };
+        if glyph_rect.x < canvas_area.right() && glyph_rect.y < canvas_area.bottom() {
+            f.render_widget(Paragraph::new(Span::styled(glyph, glyph_style)), glyph_rect);
+        }
+        // Label placement: for nodes in the rightmost layer there's no room
+        // to the right of the glyph for a hostname, so render the label
+        // left of the glyph (right-aligned against the glyph). For all other
+        // layers, keep the conventional "label to the right of the glyph".
+        let label_style = if is_cursor {
+            Style::default().fg(TEXT()).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(DIM())
+        };
+        let on_last_layer = num_layers > 1 && node_layer[i] == last_layer;
+        if on_last_layer {
+            // Right-align: label ends one column before the glyph.
+            if col > canvas_area.x + 1 {
+                let available = col.saturating_sub(canvas_area.x + 1);
+                let text = truncate(&node.label, available as usize);
+                let text_len = text.chars().count() as u16;
+                let label_x = col.saturating_sub(text_len + 1);
+                let label_rect = Rect {
+                    x: label_x.max(canvas_area.x),
+                    y: row,
+                    width: text_len,
+                    height: 1,
+                };
+                f.render_widget(
+                    Paragraph::new(Span::styled(text, label_style)),
+                    label_rect,
+                );
+            }
+        } else {
+            let label_x = col.saturating_add(2);
+            if label_x < canvas_area.right() {
+                let label_rect = Rect {
+                    x: label_x,
+                    y: row,
+                    width: canvas_area.right() - label_x,
+                    height: 1,
+                };
+                let text = truncate(&node.label, label_rect.width as usize);
+                f.render_widget(
+                    Paragraph::new(Span::styled(text, label_style)),
+                    label_rect,
+                );
+            }
+        }
+    }
+
+    let _ = max_rows;
+    let cursor_node = graph.nodes.get(cursor);
+    render_topology_footer(f, chunks[2], cursor_node);
+}
+
+fn render_topology_footer(f: &mut Frame, area: Rect, cursor_node: Option<&crate::topology::Node>) {
+    let rect = inset(area, 1, 0);
+    let mut lines: Vec<Line> = Vec::new();
+    if let Some(node) = cursor_node {
+        let kind = match node.kind {
+            crate::topology::NodeKind::Scanner => "scanner",
+            crate::topology::NodeKind::Hop => "hop (router)",
+            crate::topology::NodeKind::Scanned { .. } => "scanned host",
+        };
+        lines.push(Line::from(vec![
+            Span::styled(" ▸ ", Style::default().fg(ACCENT())),
+            Span::styled(node.label.clone(), Style::default().fg(TEXT()).bold()),
+            Span::raw("  "),
+            Span::styled(format!("depth={}  {}", node.depth, kind), Style::default().fg(DIM())),
+        ]));
+    } else {
+        lines.push(Line::raw(""));
+    }
+    lines.push(Line::from(Span::styled(
+        " [h/l] prev/next node   [j/k] within layer   [Enter] ssh to host   [Esc/T/q] close ",
+        Style::default().fg(DIM()),
+    )));
+    let para = Paragraph::new(lines);
+    f.render_widget(para, rect);
+}
+
+fn inset(r: Rect, x: u16, y: u16) -> Rect {
+    Rect {
+        x: r.x + x,
+        y: r.y + y,
+        width: r.width.saturating_sub(x * 2),
+        height: r.height.saturating_sub(y * 2),
+    }
+}
+
+fn truncate(s: &str, max: usize) -> String {
+    if max == 0 {
+        return String::new();
+    }
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
+    out.push('…');
+    out
+}
+
 fn render_help_overlay(f: &mut Frame, area: Rect) {
     let w = 62.min(area.width.saturating_sub(4));
-    let h = 18.min(area.height.saturating_sub(4));
+    let h = 22.min(area.height.saturating_sub(4));
     let x = area.x + (area.width.saturating_sub(w)) / 2;
     let y = area.y + (area.height.saturating_sub(h)) / 2;
     let rect = Rect {
@@ -1390,6 +1666,8 @@ fn render_help_overlay(f: &mut Frame, area: Rect) {
         Line::from(" [p]       pause / resume a running scan (SIGSTOP/SIGCONT)"),
         Line::from(" [x]       stop a running scan"),
         Line::from(" [Shift+E] export incident bundle (Scan tab)"),
+        Line::from(" [s]       ssh to selected host (Scan tab)"),
+        Line::from(" [Shift+T] open network topology view (Scan / History)"),
         Line::from(" [m]       mark scan for diff  (History tab)"),
         Line::from(" [d]       diff marked ↔ current  (History tab)"),
         Line::from(" [e]       export selected history entry"),

@@ -60,6 +60,8 @@ pub struct AppConfig {
     #[serde(default)]
     pub ui: UiConfig,
     #[serde(default)]
+    pub ssh: SshConfig,
+    #[serde(default)]
     pub schedules: Vec<ScheduleConfig>,
 }
 
@@ -68,9 +70,23 @@ impl Default for AppConfig {
         Self {
             ai: AiConfig::default(),
             ui: UiConfig::default(),
+            ssh: SshConfig::default(),
             schedules: Vec::new(),
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SshConfig {
+    /// Optional login user; when empty, ssh uses the shell default.
+    #[serde(default)]
+    pub user: String,
+    /// Optional port override; 0 means "let ssh pick (22)".
+    #[serde(default)]
+    pub port: u16,
+    /// Extra flags forwarded verbatim before the target (e.g. ["-A", "-X"]).
+    #[serde(default)]
+    pub extra_args: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -159,6 +175,15 @@ timeout_secs = {}
 # Options: dark, solarized, dracula, nord, gruvbox
 [ui]
 theme = "{}"
+
+# SSH — press [s] on the Scan tab to ssh into the selected host.
+# user       leave empty to use the shell default
+# port       0 means don't pass -p (defaults to 22)
+# extra_args flags forwarded verbatim before the target (e.g. ["-A"])
+[ssh]
+user = ""
+port = 0
+extra_args = []
 "#,
             default.ai.endpoint, default.ai.model, default.ai.timeout_secs, default.ui.theme
         );

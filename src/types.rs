@@ -23,6 +23,16 @@ pub struct Host {
     pub status: HostStatus,
     pub ports: Vec<Port>,
     pub os_guess: Option<String>,
+    pub hops: Vec<Hop>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Hop {
+    pub ttl: u8,
+    pub ipaddr: String,
+    pub host: Option<String>,
+    #[allow(dead_code)]
+    pub rtt_ms: Option<f32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
