@@ -1014,8 +1014,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "netscan"
-version = "0.8.0"
+name = "netscan-tui"
+version = "0.8.1"
 dependencies = [
  "anyhow",
  "clap",
