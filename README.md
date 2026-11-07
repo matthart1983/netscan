@@ -20,12 +20,13 @@ netscan wraps the `nmap` engine with a real workflow: target inventory, saved sc
 live streaming results as each host comes in, and scan history with differential scanning.
 One binary. No config required on first run.
 
-**Status:** v0.1.0 — first public release. Target and profile CRUD via TUI
-forms, live streaming scan view with real-time progress bar + ETA and
-pause/resume, SQLite-backed scan history, automatic differential scanning,
-incident bundle export, manual diff between any two historical scans, opt-in
-AI triage via local or remote Ollama, and 5 built-in themes are all working.
-NSE script picker and scheduled/daemon mode are next.
+**Status:** v0.8.1 (April 2026). Target and profile CRUD via TUI forms, live
+streaming scan view with real-time progress bar + ETA and pause/resume,
+SQLite-backed scan history, automatic differential scanning, scheduled scans
+with a headless `--daemon` mode, a topology view with ssh drill-down, incident
+bundle export, manual diff between any two historical scans, opt-in AI triage
+via local or remote Ollama, and 5 built-in themes are all working. Not yet
+built: an NSE script picker and webhook alerts on change.
 
 ---
 
@@ -235,8 +236,9 @@ never need to include those yourself.
 - [x] Theme system (5 built-in themes, persisted)
 - [x] Live progress bar + ETA from nmap's `--stats-every` on stderr
 - [x] Pause / resume running scans via SIGSTOP / SIGCONT
+- [x] Scheduled scans and headless `--daemon` mode
+- [x] Topology view with ssh drill-down (`Shift+T`)
 - [ ] NSE script picker
-- [ ] Scheduled / daemon mode for background scans
 - [ ] Webhook alerts on change
 
 ## License
